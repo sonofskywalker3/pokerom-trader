@@ -22,6 +22,37 @@
 
 #include <string.h>
 
+/*
+ * A save slot is only trustworthy if every one of its 14 sections carries the
+ * validation magic and an in-range section id. A freshly-created save file has
+ * one written slot and one uninitialized slot; the uninitialized slot's footer
+ * (and thus its save_index) is garbage -- typically 0xFFFFFFFF -- so comparing
+ * raw save_index values alone would wrongly select the empty slot. Checking
+ * validity first is how the real games avoid loading a stale/blank block.
+ */
+static bool _pksav_gba_save_slot_is_valid(
+    const union pksav_gba_save_slot* p_save_slot
+)
+{
+    bool is_valid = true;
+
+    for(size_t section_index = 0;
+        (section_index < PKSAV_GBA_NUM_SAVE_SECTIONS) && is_valid;
+        ++section_index)
+    {
+        const struct pksav_gba_section_footer* p_footer =
+            &p_save_slot->sections_arr[section_index].footer;
+
+        if((p_footer->section_id > (PKSAV_GBA_NUM_SAVE_SECTIONS-1)) ||
+           (pksav_littleendian32(p_footer->validation) != PKSAV_GBA_VALIDATION_MAGIC))
+        {
+            is_valid = false;
+        }
+    }
+
+    return is_valid;
+}
+
 union pksav_gba_save_slot* pksav_gba_get_active_save_slot_ptr(
     uint8_t* p_buffer,
     size_t buffer_len
@@ -34,20 +65,37 @@ union pksav_gba_save_slot* pksav_gba_get_active_save_slot_ptr(
     if(buffer_len >= PKSAV_GBA_SAVE_SLOT_SIZE*2)
     {
         union pksav_gba_save_slot* save_slots = (union pksav_gba_save_slot*)p_buffer;
-        uint32_t save_index1 = pksav_littleendian32(
+
+        bool slot0_valid = _pksav_gba_save_slot_is_valid(&save_slots[0]);
+        bool slot1_valid = _pksav_gba_save_slot_is_valid(&save_slots[1]);
+
+        uint32_t save_index0 = pksav_littleendian32(
                                    save_slots[0].section0.footer.save_index
                                );
-        uint32_t save_index2 = pksav_littleendian32(
+        uint32_t save_index1 = pksav_littleendian32(
                                    save_slots[1].section0.footer.save_index
                                );
 
-        if(save_index1 > save_index2)
+        if(slot0_valid && slot1_valid)
+        {
+            // Both slots written: the active one has the higher save counter.
+            p_active_save_slot = (save_index0 > save_index1) ? &save_slots[0]
+                                                             : &save_slots[1];
+        }
+        else if(slot0_valid)
         {
             p_active_save_slot = &save_slots[0];
         }
-        else
+        else if(slot1_valid)
         {
             p_active_save_slot = &save_slots[1];
+        }
+        else
+        {
+            // Neither slot validates; hand back the higher-index one so the
+            // caller's own validation can still reject it (legacy behavior).
+            p_active_save_slot = (save_index0 > save_index1) ? &save_slots[0]
+                                                             : &save_slots[1];
         }
     }
     else if(buffer_len >= PKSAV_GBA_SAVE_SLOT_SIZE)
