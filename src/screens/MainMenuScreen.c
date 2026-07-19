@@ -7,6 +7,7 @@ enum main_menu_buttons
     BUTTON_TRADE,
     BUTTON_EVOLVE,
     BUTTON_BILLS_PC,
+    BUTTON_EVENTS,
     BUTTON_SETTINGS,
     BUTTON_QUIT,
     BUTTON_COUNT
@@ -222,8 +223,8 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     DrawCircle(SCREEN_WIDTH * 1.15, SCREEN_HEIGHT * 1.725, 800, BLACK);
     DrawCircle(SCREEN_WIDTH * 1.15, SCREEN_HEIGHT * 1.725, 730, WHITE);
 
-    // Start position of menu buttons
-    const Vector2 text_position_start = (Vector2){75, 200};
+    // Start position of menu buttons (raised to fit six items)
+    const Vector2 text_position_start = (Vector2){75, 175};
     // Button height offset from start position
     const int rec_height_offset = 50;
     // Menu button text size
@@ -340,8 +341,35 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
         reset_anim_pos(BUTTON_BILLS_PC);
     }
 
+    // On Hover/Click Events button
+    if (draw_menu_button(text_position_start.x + 45, text_position_start.y + (rec_height_offset * 3), "Events", text_size))
+    {
+        set_active_animation(BUTTON_EVENTS);
+    }
+
+    // Update/Draw animated Events details pane
+    if (active_anim_index == BUTTON_EVENTS)
+    {
+        slide_animate_details_pane(BUTTON_EVENTS);
+        // Simple "ticket" icon
+        int tx = details_rec.x + anim_from_right[BUTTON_EVENTS] + 60;
+        int ty = details_rec.y + 90;
+        DrawRectangle(tx, ty, 130, 70, BLACK);
+        DrawRectangle(tx + 4, ty + 4, 122, 62, COLOR_PKMN_YELLOW);
+        DrawCircle(tx + 4, ty + 35, 8, BLACK);
+        DrawCircle(tx + 126, ty + 35, 8, BLACK);
+        DrawRectangle(tx + 16, ty + 16, 98, 8, BLACK);
+        DrawRectangle(tx + 16, ty + 34, 60, 6, (Color){120, 120, 120, 255});
+        DrawRectangle(tx + 16, ty + 46, 80, 6, (Color){120, 120, 120, 255});
+        DrawText("Re-issue event tickets", details_text.x + anim_from_right[BUTTON_EVENTS] + 55, details_text.y, 20, BLACK);
+    }
+    else
+    {
+        reset_anim_pos(BUTTON_EVENTS);
+    }
+
     // On Hover/Click Settings button
-    if (draw_menu_button(text_position_start.x + 45, text_position_start.y + (rec_height_offset * 3), "Settings", text_size))
+    if (draw_menu_button(text_position_start.x + 60, text_position_start.y + (rec_height_offset * 4), "Settings", text_size))
     {
         set_active_animation(BUTTON_SETTINGS);
     }
@@ -363,7 +391,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Quit button
-    if (draw_menu_button(text_position_start.x + 60, text_position_start.y + (rec_height_offset * 4), "Quit", text_size))
+    if (draw_menu_button(text_position_start.x + 75, text_position_start.y + (rec_height_offset * 5), "Quit", text_size))
     {
         set_active_animation(BUTTON_QUIT);
     }
@@ -420,6 +448,17 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
             {
                 no_dir_err = get_save_files(save_file_data);
                 *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
+                reset_all_anim_pos();
+                clear_active_animation();
+            }
+            break;
+        }
+        case BUTTON_EVENTS:
+        {
+            if (active_hover_index == BUTTON_EVENTS)
+            {
+                no_dir_err = get_save_files(save_file_data);
+                *current_screen = SCREEN_EVENTS_FILE_SELECT;
                 reset_all_anim_pos();
                 clear_active_animation();
             }

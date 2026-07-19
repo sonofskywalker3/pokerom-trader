@@ -404,7 +404,8 @@ void draw_raylib_screen_loop(
         // more rows); every other screen uses the fixed 800x480 layout.
         set_dynamic_viewport(current_screen == SCREEN_FILE_SELECT ||
                              current_screen == SCREEN_BILLS_PC_FILE_SELECT ||
-                             current_screen == SCREEN_EVOLVE_FILE_SELECT);
+                             current_screen == SCREEN_EVOLVE_FILE_SELECT ||
+                             current_screen == SCREEN_EVENTS_FILE_SELECT);
 
         switch (current_screen)
         {
@@ -434,6 +435,12 @@ void draw_raylib_screen_loop(
             break;
         case SCREEN_EVOLVE:
             draw_evolve(pkmn_save_player1, player1_save_path, trainer1, &current_screen, &textures[T_EVOLVE]);
+            break;
+        case SCREEN_EVENTS_FILE_SELECT:
+            draw_file_select_single(save_file_data, pkmn_save_player1, player1_save_path, trainer1, &trainerSelection[0], SINGLE_PLAYER_MENU_TYPE_EVENTS, &current_screen);
+            break;
+        case SCREEN_EVENTS:
+            draw_events(pkmn_save_player1, player1_save_path, trainer1, &current_screen);
             break;
         case SCREEN_ABOUT:
             draw_about(&current_screen, is_build_prerelease);

@@ -20,6 +20,9 @@ uint32_t gen3_exp_for_level(int level, uint8_t growth_rate);
 // Level (1-100) implied by a total EXP value for a growth-rate group.
 int gen3_level_from_exp(uint32_t exp, uint8_t growth_rate);
 
+// Growth-rate group (0-5) for a National Dex number (#1..386), 0 if out of range.
+uint8_t gen3_growth_rate_for_dex(uint16_t national_dex);
+
 // Compute the party_data (level, stats, full HP) for a Gen 3 Pokémon from its
 // persistent pc_data. Returns true on success, false if the species has no
 // base-stat data (e.g. an egg or unknown index) — in which case the caller
