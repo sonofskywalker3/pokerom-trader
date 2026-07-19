@@ -90,6 +90,8 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
         party_count = pkmn_save->save.gen1_save.pokemon_storage.p_party->count;
     else if (save_generation_type == SAVE_GENERATION_2)
         party_count = pkmn_save->save.gen2_save.pokemon_storage.p_party->count;
+    else if (save_generation_type == SAVE_GENERATION_3)
+        party_count = (int)pkmn_save->save.gba_save.pokemon_storage.p_party->count;
 
 
     // Details Panel Rectangle
@@ -130,6 +132,12 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             pksav_gen2_import_text(pkmn_save->save.gen2_save.pokemon_storage.p_party->nicknames[i], pokemon_nickname, PKMN_NAME_TEXT_MAX);
             draw_pkmn_button((Rectangle){TRAINER_NAME_X, TRAINER_NAME_Y + 75 + (i * 30), MeasureText(pokemon_nickname, 20) + 10, 30}, i, pokemon_nickname, selected_index == i || evolve_eligible == E_EVO_STATUS_NOT_ELIGIBLE);
         }
+        else if (save_generation_type == SAVE_GENERATION_3)
+        {
+            evolve_eligible = check_trade_evolution_gen3(pkmn_save, i);
+            pksav_gba_import_text(pkmn_save->save.gba_save.pokemon_storage.p_party->party[i].pc_data.nickname, pokemon_nickname, PKMN_NAME_TEXT_MAX);
+            draw_pkmn_button((Rectangle){TRAINER_NAME_X, TRAINER_NAME_Y + 75 + (i * 30), MeasureText(pokemon_nickname, 20) + 10, 30}, i, pokemon_nickname, selected_index == i || evolve_eligible != E_EVO_STATUS_ELIGIBLE);
+        }
         // Selected pokemon button
         if (CheckCollisionPointRec(GetMousePosition(), (Rectangle){TRAINER_NAME_X, TRAINER_NAME_Y + 75 + (i * 30), 200, 30}) && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
         {
@@ -146,6 +154,8 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
                     is_trade_eligible = check_trade_evolution_gen1(pkmn_save, selected_index);
                 else if (save_generation_type == SAVE_GENERATION_2)
                     is_trade_eligible = check_trade_evolution_gen2(pkmn_save, selected_index);
+                else if (save_generation_type == SAVE_GENERATION_3)
+                    is_trade_eligible = check_trade_evolution_gen3(pkmn_save, selected_index) == E_EVO_STATUS_ELIGIBLE;
             }
         }
     }
@@ -223,6 +233,33 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_SPEED]), dv_text_pos_x, container_rec.y + 190, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_SPECIAL]), dv_text_pos_x, container_rec.y + 220, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_SPECIAL]), dv_text_pos_x, container_rec.y + 250, 20, WHITE);
+        }
+        else if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+        {
+            struct pksav_gba_party_pokemon party_pkmn = pkmn_save->save.gba_save.pokemon_storage.p_party->party[selected_index];
+            pksav_gba_import_text(party_pkmn.pc_data.nickname, selected_pokemon_nickname, PKMN_NAME_TEXT_MAX);
+            shadow_text(TextFormat("Level %u", party_pkmn.party_data.level), text_pos_x, container_rec.y + 40, 20, WHITE);
+            shadow_text("Stats", stat_text_pos_x - 15, container_rec.y + 70, 20, WHITE);
+            shadow_text("IVs", dv_text_pos_x, container_rec.y + 70, 20, WHITE);
+            shadow_text("HP:", text_pos_x, container_rec.y + 100, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.max_hp)), stat_text_pos_x, container_rec.y + 100, 20, WHITE);
+            shadow_text("Atk:", text_pos_x, container_rec.y + 130, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.atk)), stat_text_pos_x, container_rec.y + 130, 20, WHITE);
+            shadow_text("Def:", text_pos_x, container_rec.y + 160, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.def)), stat_text_pos_x, container_rec.y + 160, 20, WHITE);
+            shadow_text("Spd:", text_pos_x, container_rec.y + 190, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.spd)), stat_text_pos_x, container_rec.y + 190, 20, WHITE);
+            shadow_text("Sp.A:", text_pos_x, container_rec.y + 220, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.spatk)), stat_text_pos_x, container_rec.y + 220, 20, WHITE);
+            shadow_text("Sp.D:", text_pos_x, container_rec.y + 250, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.spdef)), stat_text_pos_x, container_rec.y + 250, 20, WHITE);
+            uint32_t iv = pksav_littleendian32(party_pkmn.pc_data.blocks.misc.iv_egg_ability);
+            shadow_text(TextFormat("%u", (iv >> 0) & 0x1F), dv_text_pos_x, container_rec.y + 100, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 5) & 0x1F), dv_text_pos_x, container_rec.y + 130, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 10) & 0x1F), dv_text_pos_x, container_rec.y + 160, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 15) & 0x1F), dv_text_pos_x, container_rec.y + 190, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 20) & 0x1F), dv_text_pos_x, container_rec.y + 220, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 25) & 0x1F), dv_text_pos_x, container_rec.y + 250, 20, WHITE);
         }
         // Draw nickname
         shadow_text(selected_pokemon_nickname, text_pos_x, container_rec.y + 10, 20, WHITE);

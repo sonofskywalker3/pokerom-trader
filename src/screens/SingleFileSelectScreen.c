@@ -62,12 +62,8 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
         // Update and draw save files
         for (int i = 0; i < save_file_data->num_saves; i++)
         {
-            // Gen 3 box management is supported; Gen 3 is not yet supported by
-            // Evolve, so gate it there (like a corrupted save) but not for Boxes.
-            bool gen3_unsupported = pkmn_saves[i].save_generation_type == SAVE_GENERATION_3 &&
-                                    menu_type != SINGLE_PLAYER_MENU_TYPE_BILLS_PC;
-            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED ||
-                                gen3_unsupported;
+            // Gen 3 is supported by both single-save features (Boxes and Evolve).
+            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED;
             const Rectangle save_file_rec = (Rectangle){SCREEN_WIDTH / 2 - (SCREEN_WIDTH - 50) / 2, y_offset + (93 * i) - (60 * corrupted_count), SCREEN_WIDTH - 50, 80};
 
             if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT))

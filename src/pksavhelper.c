@@ -210,6 +210,83 @@ enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save
     return E_EVO_STATUS_NOT_ELIGIBLE;
 }
 
+// --- Gen 3 trade evolutions ---
+// Held-item indices are Gen 3 item IDs.
+#define GEN3_ITEM_KINGS_ROCK   187
+#define GEN3_ITEM_DEEPSEATOOTH 226
+#define GEN3_ITEM_DEEPSEASCALE 227
+#define GEN3_ITEM_UPGRADE      229
+#define GEN3_ITEM_METAL_COAT   233
+#define GEN3_ITEM_DRAGON_SCALE 235
+
+// Trade-evolution table keyed by National Dex. required_item == 0 is a plain
+// trade evolution; otherwise the held item must match and is consumed.
+struct gen3_trade_evo
+{
+    uint16_t from_dex;
+    uint16_t to_dex;
+    uint16_t required_item;
+};
+
+static const struct gen3_trade_evo gen3_trade_evos[] = {
+    {64, 65, 0},                        // Kadabra   -> Alakazam
+    {67, 68, 0},                        // Machoke   -> Machamp
+    {75, 76, 0},                        // Graveler  -> Golem
+    {93, 94, 0},                        // Haunter   -> Gengar
+    {61, 186, GEN3_ITEM_KINGS_ROCK},    // Poliwhirl -> Politoed
+    {79, 199, GEN3_ITEM_KINGS_ROCK},    // Slowpoke  -> Slowking
+    {95, 208, GEN3_ITEM_METAL_COAT},    // Onix      -> Steelix
+    {123, 212, GEN3_ITEM_METAL_COAT},   // Scyther   -> Scizor
+    {117, 230, GEN3_ITEM_DRAGON_SCALE}, // Seadra    -> Kingdra
+    {137, 233, GEN3_ITEM_UPGRADE},      // Porygon   -> Porygon2
+    {366, 367, GEN3_ITEM_DEEPSEATOOTH}, // Clamperl  -> Huntail
+    {366, 368, GEN3_ITEM_DEEPSEASCALE}, // Clamperl  -> Gorebyss
+};
+
+// Find the trade-evolution entry for a party mon. Returns the entry, or NULL if
+// the species has no trade evolution. *out_missing_item is set true when the
+// species does have an item-based evolution but isn't holding the right item.
+static const struct gen3_trade_evo *gen3_find_trade_evo(const struct pksav_gba_pc_pokemon *pc, bool *out_missing_item)
+{
+    if (out_missing_item)
+    {
+        *out_missing_item = false;
+    }
+    uint16_t dex = gen3_internal_to_national(pksav_littleendian16(pc->blocks.growth.species));
+    uint16_t held = pksav_littleendian16(pc->blocks.growth.held_item);
+    bool species_has_evo = false;
+    size_t count = sizeof(gen3_trade_evos) / sizeof(gen3_trade_evos[0]);
+    for (size_t i = 0; i < count; i++)
+    {
+        if (gen3_trade_evos[i].from_dex != dex)
+        {
+            continue;
+        }
+        species_has_evo = true;
+        if (gen3_trade_evos[i].required_item == 0 || gen3_trade_evos[i].required_item == held)
+        {
+            return &gen3_trade_evos[i];
+        }
+    }
+    if (species_has_evo && out_missing_item)
+    {
+        *out_missing_item = true; // has an item evolution but not holding it
+    }
+    return NULL;
+}
+
+enum eligible_evolution_status check_trade_evolution_gen3(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
+{
+    const struct pksav_gba_pc_pokemon *pc = &pkmn_save->save.gba_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data;
+    bool missing_item = false;
+    const struct gen3_trade_evo *evo = gen3_find_trade_evo(pc, &missing_item);
+    if (evo != NULL)
+    {
+        return E_EVO_STATUS_ELIGIBLE;
+    }
+    return missing_item ? E_EVO_STATUS_MISSING_ITEM : E_EVO_STATUS_NOT_ELIGIBLE;
+}
+
 // Function to calculate HP based on base stat, IV, Stat Exp, and level
 uint8_t calculate_hp(uint8_t level, uint8_t base_hp, uint8_t dv_hp, uint16_t stat_exp)
 {
@@ -338,6 +415,14 @@ void update_pkmn_DVs(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 // Calculate and update the pokemon's stats based on its level, base stats, IVs, and EVs
 void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
+    // Gen 3 uses a different (nature-aware) formula; rebuild party_data wholesale.
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        struct pksav_gba_party_pokemon *p = &pkmn_save->save.gba_save.pokemon_storage.p_party->party[pkmn_party_index];
+        gen3_build_party_data(&p->pc_data, &p->party_data);
+        return;
+    }
+
     // Get the pokemon's DVs
     uint8_t pkmn_dvs[PKSAV_NUM_GB_IVS];
     pksav_get_gb_IVs(&pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data, pkmn_dvs, sizeof(pkmn_dvs));
@@ -830,6 +915,56 @@ pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, Po
 // Convert party pokemon to evolution pokemon with updated stats and properties
 void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        struct pksav_gba_party_pokemon *party = &pkmn_save->save.gba_save.pokemon_storage.p_party->party[pkmn_party_index];
+        struct pksav_gba_pc_pokemon *pc = &party->pc_data;
+
+        const struct gen3_trade_evo *evo = gen3_find_trade_evo(pc, NULL);
+        if (evo == NULL)
+        {
+            return; // not eligible (shouldn't happen; UI gates on eligibility)
+        }
+
+        // If the nickname is still the default (pre-evo species name), update it.
+        // Gen 3 in-game names are uppercase; compare uppercased forms.
+        char nickname[PKMN_NAME_TEXT_MAX + 1] = "\0";
+        pksav_gba_import_text(pc->nickname, nickname, PKMN_NAME_TEXT_MAX);
+        char from_name[PKMN_NAME_TEXT_MAX + 1] = "\0";
+        char to_name[PKMN_NAME_TEXT_MAX + 1] = "\0";
+        strncpy(from_name, gen3_national_dex_name(evo->from_dex), PKMN_NAME_TEXT_MAX);
+        strncpy(to_name, gen3_national_dex_name(evo->to_dex), PKMN_NAME_TEXT_MAX);
+        for (int i = 0; from_name[i] != '\0'; i++)
+        {
+            from_name[i] = (char)toupper((unsigned char)from_name[i]);
+        }
+        for (int i = 0; to_name[i] != '\0'; i++)
+        {
+            to_name[i] = (char)toupper((unsigned char)to_name[i]);
+        }
+        for (int i = 0; nickname[i] != '\0'; i++)
+        {
+            nickname[i] = (char)toupper((unsigned char)nickname[i]);
+        }
+        bool is_default_name = strcmp(nickname, from_name) == 0;
+
+        // Change species (growth block) and consume the held item if required.
+        pc->blocks.growth.species = pksav_littleendian16(gen3_national_to_internal(evo->to_dex));
+        if (evo->required_item != 0)
+        {
+            pc->blocks.growth.held_item = 0;
+        }
+
+        if (is_default_name)
+        {
+            pksav_gba_export_text(to_name, pc->nickname, PKMN_NAME_TEXT_MAX);
+        }
+
+        // Recompute the derived stats for the new species.
+        gen3_build_party_data(pc, &party->party_data);
+        return;
+    }
+
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         // Get the species index of the pokemon being evolved

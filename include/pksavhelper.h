@@ -124,6 +124,7 @@ void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer);
 pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 enum eligible_evolution_status check_trade_evolution_gen1(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
+enum eligible_evolution_status check_trade_evolution_gen3(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 void generate_random_number_step(void);
 void update_pkmn_DVs(PokemonSave *pkmn_save, uint8_t pkmn_party_index);

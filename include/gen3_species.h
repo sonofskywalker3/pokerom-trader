@@ -24,6 +24,11 @@
  * Returns 0 for an empty slot (internal index 0) or an unused/glitch index. */
 uint16_t gen3_internal_to_national(uint16_t internal_index);
 
+/* Convert a National Dex number (1..386) to its Gen 3 internal species index
+ * (identity for #1..251, national+25 for Hoenn #252..386). Returns 0 if out of
+ * range. This is the inverse of gen3_internal_to_national. */
+uint16_t gen3_national_to_internal(uint16_t national_dex);
+
 /* Human-readable species name for a National Dex number (1..386).
  * Returns "?" for 0 or out-of-range. */
 const char *gen3_national_dex_name(uint16_t national_dex);
