@@ -99,6 +99,13 @@ uint16_t gen3_internal_to_national(uint16_t internal_index)
     return 0;                                                 /* unused/glitch */
 }
 
+uint16_t gen3_national_to_internal(uint16_t national_dex)
+{
+    if (national_dex < 1 || national_dex > GEN3_NATIONAL_DEX_MAX) return 0;
+    if (national_dex <= 251) return national_dex;             /* identity */
+    return (uint16_t)(national_dex + 25);                     /* Hoenn block */
+}
+
 const char *gen3_national_dex_name(uint16_t national_dex)
 {
     if (national_dex < 1 || national_dex > GEN3_NATIONAL_DEX_MAX) return "?";
