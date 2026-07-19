@@ -33,6 +33,7 @@ enum single_player_menu_types
 {
     SINGLE_PLAYER_MENU_TYPE_EVOLVE,
     SINGLE_PLAYER_MENU_TYPE_BILLS_PC,
+    SINGLE_PLAYER_MENU_TYPE_EVENTS,
     SINGLE_PLAYER_MENU_TYPE_EXIT
 };
 
@@ -99,6 +100,8 @@ typedef enum
     SCREEN_BILLS_PC,
     SCREEN_EVOLVE_FILE_SELECT,
     SCREEN_EVOLVE,
+    SCREEN_EVENTS_FILE_SELECT,
+    SCREEN_EVENTS,
     SCREEN_LEGAL
 } GameScreen;
 
@@ -190,6 +193,8 @@ typedef enum
     error_update_pokedex,
     error_update_files,
     error_evolve_pkmn,
+    error_transfer_not_obtainable,
+    error_transfer_no_space,
 } pksavhelper_error;
 
 #endif // COMMON_H

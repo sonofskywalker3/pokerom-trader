@@ -241,6 +241,15 @@ static const struct pkmn_base_stats *gen3_base_for_dex(uint16_t dex)
     return NULL;
 }
 
+uint8_t gen3_growth_rate_for_dex(uint16_t national_dex)
+{
+    if (national_dex < 1 || national_dex > GEN3_NATIONAL_DEX_MAX)
+    {
+        return 0;
+    }
+    return gen3_growth_rate[national_dex];
+}
+
 uint32_t gen3_exp_for_level(int n, uint8_t growth_rate)
 {
     if (n <= 1)
