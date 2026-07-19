@@ -4,7 +4,11 @@
 #include <pksav.h>
 
 #define SCREEN_WIDTH 800
-#define SCREEN_HEIGHT 480
+// Base (design) height. The actual virtual height can grow for list screens so
+// a taller window shows more rows; SCREEN_HEIGHT reports the current value.
+#define SCREEN_HEIGHT_BASE 480
+int virtual_screen_height(void);
+#define SCREEN_HEIGHT (virtual_screen_height())
 
 #define new_max(x, y) (((x) >= (y)) ? (x) : (y))
 #define new_min(x, y) (((x) <= (y)) ? (x) : (y))

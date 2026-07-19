@@ -13,7 +13,7 @@ enum main_menu_buttons
 };
 const uint8_t anim_speed = 45;
 // Entire details pane stays in place
-const Rectangle details_rec = (Rectangle){SCREEN_WIDTH * 0.55, SCREEN_HEIGHT * 0.35, 200, 200};
+const Rectangle details_rec = (Rectangle){SCREEN_WIDTH * 0.55, SCREEN_HEIGHT_BASE * 0.35, 200, 200};
 // starting position of details pane content offscreen (offset from details_rec.x)
 const uint16_t offscreen_x = 415;
 // offset from details_rec.x
