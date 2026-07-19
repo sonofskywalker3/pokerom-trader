@@ -415,6 +415,9 @@ void draw_raylib_screen_loop(
         case SCREEN_TRADE:
             draw_trade(pkmn_save_player1, pkmn_save_player2, player1_save_path, player2_save_path, trainerSelection, trainer1, trainer2, &is_same_generation, &current_screen, &textures[T_TRADE]);
             break;
+        case SCREEN_TRANSFER:
+            draw_transfer(pkmn_save_player1, pkmn_save_player2, player1_save_path, player2_save_path, trainer1, trainer2, &current_screen);
+            break;
         case SCREEN_MAIN_MENU:
             draw_main_menu(save_file_data, &current_screen, &should_close_window, textures);
             break;

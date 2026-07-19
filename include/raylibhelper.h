@@ -39,6 +39,7 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
 void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info *trainer, struct TrainerSelection *trainerSelection, GameScreen *current_screen);
 void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *trainer, GameScreen *current_screen, Texture2D *evolve_texture);
 void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *trainer, GameScreen *current_screen);
+void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *player1_save_path, char *player2_save_path, struct trainer_info *trainer1, struct trainer_info *trainer2, GameScreen *current_screen);
 void handle_list_scroll(int *y_offset, const int num_saves, const int corrupted_count, int *mouses_down_index, bool *is_moving_scroll, int *banner_position_offset);
 void update_selected_indexes_with_selection(int *selected_saves_index, int *mouses_down_index, bool *is_moving_scroll);
 void draw_no_save_files(char *save_path);
