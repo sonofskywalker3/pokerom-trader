@@ -24,6 +24,27 @@ int error_handler(enum pksav_error error, const char *message)
 pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon_party_index)
 {
     enum pksav_error pksav_error;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        uint16_t internal = pksav_littleendian16(pkmn_save->save.gba_save.pokemon_storage.p_party->party[pokemon_party_index].pc_data.blocks.growth.species);
+        uint16_t dex = gen3_internal_to_national(internal);
+        if (dex == 0)
+        {
+            return error_none; // egg / unknown: nothing to record
+        }
+        struct pksav_gba_pokedex *pokedex = &pkmn_save->save.gba_save.pokedex;
+        pksav_error = pksav_gba_pokedex_set_has_seen(pokedex, dex, true);
+        if (pksav_error != PKSAV_ERROR_NONE)
+        {
+            error_handler(pksav_error, "Error setting gen3 seen bit");
+        }
+        pksav_error = pksav_set_pokedex_bit(pokedex->p_owned, dex, true);
+        if (pksav_error != PKSAV_ERROR_NONE)
+        {
+            error_handler(pksav_error, "Error setting gen3 owned bit");
+        }
+        return pksav_error == PKSAV_ERROR_NONE ? error_none : error_update_pokedex;
+    }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         uint8_t pkmn_species = pkmn_save->save.gen1_save.pokemon_storage.p_party->species[pokemon_party_index];
@@ -153,6 +174,7 @@ void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer)
         pksav_gba_import_text(pkmn_save->save.gba_save.player_info.p_name, trainer_name, TRAINER_NAME_TEXT_MAX);
         strcpy(trainer->trainer_name, trainer_name);
         trainer->trainer_id = pksav_littleendian16(pkmn_save->save.gba_save.player_info.p_id->pid);
+        trainer->pokemon_party.gba_pokemon_party = *pkmn_save->save.gba_save.pokemon_storage.p_party;
         trainer->trainer_generation = SAVE_GENERATION_3;
         break;
     }
@@ -395,6 +417,14 @@ bool is_move_HM(uint8_t move_index)
 
 enum eligible_trade_status check_trade_eligibility(struct trainer_info *trainer, uint8_t pkmn_party_index)
 {
+    // Gen 3 <-> Gen 3 trades have no cross-gen restrictions (only reached for
+    // cross-gen pairs, which never involve Gen 3).
+    if (trainer->trainer_generation == SAVE_GENERATION_3)
+    {
+        (void)pkmn_party_index;
+        return E_TRADE_STATUS_ELIGIBLE;
+    }
+
     // All Gen1 saves are eligible for trade except with HM moves
     if (trainer->trainer_generation == SAVE_GENERATION_1)
     {
@@ -634,6 +664,19 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
 pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, PokemonSave *player2_save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2)
 {
     enum pksav_error pksav_error;
+
+    // Gen 3 <-> Gen 3: the entire party entry (pc_data + derived party_data)
+    // travels together, so a trade is just exchanging the two structs. OT, PID,
+    // IVs, EVs and stats are all preserved (a real Gen 3 trade keeps OT).
+    if (player1_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        struct pksav_gba_pokemon_party *p1 = player1_save->save.gba_save.pokemon_storage.p_party;
+        struct pksav_gba_pokemon_party *p2 = player2_save->save.gba_save.pokemon_storage.p_party;
+        struct pksav_gba_party_pokemon tmp = p1->party[pkmn_party_index1];
+        p1->party[pkmn_party_index1] = p2->party[pkmn_party_index2];
+        p2->party[pkmn_party_index2] = tmp;
+        return error_none;
+    }
 
     // swap nickname
     char tmp_nickname1[PKMN_NAME_TEXT_MAX + 1] = "\0";
