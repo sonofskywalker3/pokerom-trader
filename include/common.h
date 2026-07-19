@@ -36,6 +36,7 @@ union PokemonPartyData
 {
     struct pksav_gen1_pokemon_party gen1_pokemon_party;
     struct pksav_gen2_pokemon_party gen2_pokemon_party;
+    struct pksav_gba_pokemon_party gba_pokemon_party;
 };
 
 typedef enum

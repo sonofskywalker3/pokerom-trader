@@ -90,6 +90,10 @@ void draw_trainer_info(struct trainer_info *trainer, int x, int y, struct Traine
     {
         party_count = trainer->pokemon_party.gen2_pokemon_party.count;
     }
+    else if (trainer_generation == SAVE_GENERATION_3)
+    {
+        party_count = (int)trainer->pokemon_party.gba_pokemon_party.count;
+    }
 
     shadow_text(trainer_name, x - 7, y, 20, WHITE);
     shadow_text(trainer_id, x - 7, y + 30, 20, WHITE);
@@ -116,6 +120,10 @@ void draw_trainer_info(struct trainer_info *trainer, int x, int y, struct Traine
         else if (trainer_generation == SAVE_GENERATION_2)
         {
             pksav_gen2_import_text(trainer->pokemon_party.gen2_pokemon_party.nicknames[party_index], pokemon_nickname, PKMN_NAME_TEXT_MAX);
+        }
+        else if (trainer_generation == SAVE_GENERATION_3)
+        {
+            pksav_gba_import_text(trainer->pokemon_party.gba_pokemon_party.party[party_index].pc_data.nickname, pokemon_nickname, PKMN_NAME_TEXT_MAX);
         }
 
         draw_pkmn_button((Rectangle){x - 10, y + 70 + (party_index * 30), 200, 30}, party_index, pokemon_nickname, current_trainer_index != -1 && (trainer_selection[current_trainer_index].pkmn_party_index == party_index));
@@ -222,6 +230,36 @@ void draw_trainer_info(struct trainer_info *trainer, int x, int y, struct Traine
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_SPEED]), dv_text_pos_x, container_rec.y + 190, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_SPECIAL]), dv_text_pos_x, container_rec.y + 220, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_SPECIAL]), dv_text_pos_x, container_rec.y + 250, 20, WHITE);
+        }
+        else if (trainer_generation == SAVE_GENERATION_3)
+        {
+            struct pksav_gba_party_pokemon party_pkmn = trainer->pokemon_party.gba_pokemon_party.party[trainer_selection[current_trainer_index].pkmn_party_index];
+            pksav_gba_import_text(party_pkmn.pc_data.nickname, selected_pokemon_nickname, PKMN_NAME_TEXT_MAX);
+            // Level
+            shadow_text(TextFormat("Level %u", party_pkmn.party_data.level), text_pos_x, container_rec.y + 40, 20, WHITE);
+            shadow_text("Stats", trainer_selection[current_trainer_index].trainer_index ? container_rec.x + 60 : container_rec.x + container_rec.width / 2 + 60, container_rec.y + 70, 20, WHITE);
+            shadow_text("IVs", dv_text_pos_x, container_rec.y + 70, 20, WHITE);
+            // Stats (GBA stores little-endian)
+            shadow_text("HP:", text_pos_x, container_rec.y + 100, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.max_hp)), stat_text_pos_x, container_rec.y + 100, 20, WHITE);
+            shadow_text("Atk:", text_pos_x, container_rec.y + 130, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.atk)), stat_text_pos_x, container_rec.y + 130, 20, WHITE);
+            shadow_text("Def:", text_pos_x, container_rec.y + 160, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.def)), stat_text_pos_x, container_rec.y + 160, 20, WHITE);
+            shadow_text("Spd:", text_pos_x, container_rec.y + 190, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.spd)), stat_text_pos_x, container_rec.y + 190, 20, WHITE);
+            shadow_text("Sp.A:", text_pos_x, container_rec.y + 220, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.spatk)), stat_text_pos_x, container_rec.y + 220, 20, WHITE);
+            shadow_text("Sp.D:", text_pos_x, container_rec.y + 250, 20, WHITE);
+            shadow_text(TextFormat("%d", pksav_littleendian16(party_pkmn.party_data.spdef)), stat_text_pos_x, container_rec.y + 250, 20, WHITE);
+            // IVs (5 bits each) from the misc block
+            uint32_t iv = pksav_littleendian32(party_pkmn.pc_data.blocks.misc.iv_egg_ability);
+            shadow_text(TextFormat("%u", (iv >> 0) & 0x1F), dv_text_pos_x, container_rec.y + 100, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 5) & 0x1F), dv_text_pos_x, container_rec.y + 130, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 10) & 0x1F), dv_text_pos_x, container_rec.y + 160, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 15) & 0x1F), dv_text_pos_x, container_rec.y + 190, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 20) & 0x1F), dv_text_pos_x, container_rec.y + 220, 20, WHITE);
+            shadow_text(TextFormat("%u", (iv >> 25) & 0x1F), dv_text_pos_x, container_rec.y + 250, 20, WHITE);
         }
         // Draw nickname
         shadow_text(selected_pokemon_nickname, text_pos_x, container_rec.y + 10, 20, WHITE);

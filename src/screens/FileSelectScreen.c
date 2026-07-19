@@ -42,6 +42,7 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
     static int y_offset = 75;
     static int banner_position_offset = 0;
     static bool show_duplicate_toast = false;
+    static bool show_incompatible_toast = false;
     save_file_count = save_file_data->num_saves;
 
     begin_virtual_frame();
@@ -88,11 +89,9 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
         // Update and draw save files
         for (int i = 0; i < save_file_data->num_saves; i++)
         {
-            // Gen 3 saves load but aren't yet supported by trading; gate them like
-            // corrupted saves (non-selectable) so they can't be opened and crash.
-            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED ||
-                                pkmn_saves[i].save_generation_type == SAVE_GENERATION_3;
-            // bool is_corrupted = false;
+            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED;
+            // Gen 3 saves are selectable for trading, but only Gen 3 <-> Gen 3 is
+            // legal; an incompatible pair is rejected at the Trade transition below.
             const Rectangle save_file_rec = (Rectangle){SCREEN_WIDTH / 2 - (SCREEN_WIDTH - 50) / 2, y_offset + (93 * i) - (60 * corrupted_count), SCREEN_WIDTH - 50, 80};
 
             // Update selected save files index
@@ -197,7 +196,11 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
                 is_duplicate_save_file = trainer1->trainer_id == trainer2->trainer_id;
 
                 *is_same_generation = pkmn_save_player1->save_generation_type == pkmn_save_player2->save_generation_type;
-                if (!is_duplicate_save_file)
+                // Gen 3 can only trade with Gen 3 (no legal cross-gen path).
+                bool p1_gen3 = pkmn_save_player1->save_generation_type == SAVE_GENERATION_3;
+                bool p2_gen3 = pkmn_save_player2->save_generation_type == SAVE_GENERATION_3;
+                bool incompatible_generations = p1_gen3 != p2_gen3;
+                if (!is_duplicate_save_file && !incompatible_generations)
                 {
                     *current_screen = SCREEN_TRADE;
                     selected_saves_index[0] = -1;
@@ -207,6 +210,11 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
                     banner_position_offset = 0;
                     reset_toast_message();
                     show_duplicate_toast = false;
+                    show_incompatible_toast = false;
+                }
+                else if (incompatible_generations)
+                {
+                    show_incompatible_toast = true;
                 }
                 else
                 {
@@ -267,6 +275,10 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
     if (show_duplicate_toast)
     {
         show_duplicate_toast = !draw_toast_message("Duplicate save files cannot trade with each other!", TOAST_LONG, TOAST_ERROR);
+    }
+    if (show_incompatible_toast)
+    {
+        show_incompatible_toast = !draw_toast_message("Gen 3 can only trade with Gen 3!", TOAST_LONG, TOAST_ERROR);
     }
 
     end_virtual_frame();
