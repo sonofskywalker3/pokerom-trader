@@ -7,6 +7,48 @@
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 
+// Fixed-resolution render target. All screens draw into this at SCREEN_WIDTH x
+// SCREEN_HEIGHT, and it is scaled up (letterboxed) to the actual window size.
+static RenderTexture2D g_render_target;
+
+// Uniform scale that fits the virtual resolution inside the current window.
+static float virtual_scale(void)
+{
+    float sx = (float)GetScreenWidth() / SCREEN_WIDTH;
+    float sy = (float)GetScreenHeight() / SCREEN_HEIGHT;
+    return sx < sy ? sx : sy;
+}
+
+void begin_virtual_frame(void)
+{
+    // Map real mouse coordinates back into virtual (800x480) space so every
+    // screen's hit-testing keeps working unchanged at any window size.
+    float scale = virtual_scale();
+    float offset_x = (GetScreenWidth() - SCREEN_WIDTH * scale) * 0.5f;
+    float offset_y = (GetScreenHeight() - SCREEN_HEIGHT * scale) * 0.5f;
+    SetMouseOffset((int)(-offset_x), (int)(-offset_y));
+    SetMouseScale(1.0f / scale, 1.0f / scale);
+
+    BeginTextureMode(g_render_target);
+}
+
+void end_virtual_frame(void)
+{
+    EndTextureMode();
+
+    float scale = virtual_scale();
+    float offset_x = (GetScreenWidth() - SCREEN_WIDTH * scale) * 0.5f;
+    float offset_y = (GetScreenHeight() - SCREEN_HEIGHT * scale) * 0.5f;
+
+    BeginDrawing();
+    ClearBackground(BLACK);
+    // Source is flipped vertically because render textures are bottom-up.
+    Rectangle src = {0.0f, 0.0f, (float)SCREEN_WIDTH, -(float)SCREEN_HEIGHT};
+    Rectangle dst = {offset_x, offset_y, SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale};
+    DrawTexturePro(g_render_target.texture, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
+    EndDrawing();
+}
+
 void draw_background_grid(void)
 {
     int line_count_v = SCREEN_HEIGHT / 10;
@@ -187,27 +229,35 @@ void draw_raylib_screen_loop(
     PokemonSave *pkmn_save_player1,
     PokemonSave *pkmn_save_player2)
 {
-    InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "Pokerom Trader");
+    InitWindow(SCREEN_WIDTH * 2, SCREEN_HEIGHT * 2, "Pokerom Trader");
+    SetWindowState(FLAG_WINDOW_RESIZABLE);
+    SetWindowMinSize(SCREEN_WIDTH, SCREEN_HEIGHT);
     SetTargetFPS(60);
     SetExitKey(0);
+
+    // Fixed-resolution target that every screen renders into, then gets scaled
+    // to the current (resizable) window in end_virtual_frame().
+    g_render_target = LoadRenderTexture(SCREEN_WIDTH, SCREEN_HEIGHT);
+    SetTextureFilter(g_render_target.texture, TEXTURE_FILTER_BILINEAR);
     GameScreen current_screen = SCREEN_MAIN_MENU;
     static bool is_same_generation = true;
     static bool should_close_window = false;
     bool is_build_prerelease = strcmp(PROJECT_VERSION_TYPE, "prerelease") == 0;
-    Texture2D textures[19] = {
-        [0 ... 18] = {
+    Texture2D textures[T_COUNT] = {
+        [0 ... T_COUNT - 1] = {
             .id = 0}};
-    const struct texture_data *texture_data[5] = {
+    const struct texture_data *texture_data[6] = {
         &evolve_data,
         &logo_data,
         &quit_data,
         &settings_data,
-        &trade_data};
+        &trade_data,
+        &boxes_data};
 
     // while textures are loading
     int texture_load_loop_limit = 3;
     int texture_loop_count = 0;
-    while (texture_loop_count <= texture_load_loop_limit && (textures[0].id == 0 || textures[1].id == 0 || textures[2].id == 0 || textures[3].id == 0 || textures[4].id == 0))
+    while (texture_loop_count <= texture_load_loop_limit && (textures[0].id == 0 || textures[1].id == 0 || textures[2].id == 0 || textures[3].id == 0 || textures[4].id == 0 || textures[T_BOXES].id == 0))
     {
         BeginDrawing();
         ClearBackground(BLACK);
@@ -300,11 +350,11 @@ void draw_raylib_screen_loop(
             draw_legal(&current_screen);
             break;
         default:
-            BeginDrawing();
+            begin_virtual_frame();
             ClearBackground(BACKGROUND_COLOR);
             DrawText("Something went wrong", SCREEN_CENTER("Something went wrong", 20).x, SCREEN_CENTER("Something went wrong", 20).y, 20, BLACK);
             DrawText("Press ESC key to exit!", SCREEN_CENTER("Press ESC key to exit!", 20).x, SCREEN_CENTER("Press ESC key to exit!", 20).x + 50, 20, BLACK);
-            EndDrawing();
+            end_virtual_frame();
             // Escape key to close window
             if (IsKeyPressed(KEY_ESCAPE))
             {
@@ -319,5 +369,6 @@ void draw_raylib_screen_loop(
         UnloadTexture(textures[i]);
     }
 
+    UnloadRenderTexture(g_render_target);
     CloseWindow();
 }

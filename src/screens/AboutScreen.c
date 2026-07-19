@@ -10,7 +10,7 @@ void draw_about(GameScreen *current_screen, bool is_build_prerelease)
         SCREEN_BUTTON_NEXT
     };
     static int selected_index = SCREEN_BUTTON_NONE;
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(BACKGROUND_COLOR);
 
     DrawText("About Pokerom Trader", x, 100, 20, BLACK);
@@ -24,7 +24,7 @@ void draw_about(GameScreen *current_screen, bool is_build_prerelease)
     DrawText("Legal >", NEXT_BUTTON_X, NEXT_BUTTON_Y, 20, selected_index == SCREEN_BUTTON_NEXT ? LIGHTGRAY : BLACK);
     DrawText("< Back", BACK_BUTTON_X, BACK_BUTTON_Y, 20, selected_index == SCREEN_BUTTON_BACK ? LIGHTGRAY : BLACK);
 
-    EndDrawing();
+    end_virtual_frame();
 
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON))
     {

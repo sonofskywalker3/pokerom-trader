@@ -12,28 +12,36 @@ enum pksav_error detect_savefile_generation(const char *path, SaveGenerationType
 
     enum pksav_gen1_save_type gen1_save_type = PKSAV_GEN1_SAVE_TYPE_NONE;
     enum pksav_gen2_save_type gen2_save_type = PKSAV_GEN2_SAVE_TYPE_NONE;
-    err = pksav_gen1_get_file_save_type(path, &gen1_save_type);
+    enum pksav_gba_save_type gba_save_type = PKSAV_GBA_SAVE_TYPE_NONE;
 
-    if (gen1_save_type == PKSAV_GEN1_SAVE_TYPE_NONE)
-    {
-        pksav_gen2_get_file_save_type(path, &gen2_save_type);
-        if (gen2_save_type == PKSAV_GEN2_SAVE_TYPE_NONE)
-        {
-            SAVE_FILE_ERROR = PKSAV_ERROR_INVALID_SAVE;
-            *save_generation_type = SAVE_GENERATION_CORRUPTED;
-            return 0;
-        }
-        else
-        {
-            *save_generation_type = SAVE_GENERATION_2;
-        }
-    }
-    else
+    err = pksav_gen1_get_file_save_type(path, &gen1_save_type);
+    if (gen1_save_type != PKSAV_GEN1_SAVE_TYPE_NONE)
     {
         *save_generation_type = SAVE_GENERATION_1;
+        return err;
     }
 
-    return err;
+    // Check Gen 3 (GBA) before Gen 2. The GBA format has a strong, specific
+    // signature (0x08012025 section footer + matching security key), whereas
+    // Gen 2's detection is a weaker checksum heuristic that can false-positive
+    // on a 128 KB GBA save. Checking GBA first avoids misclassifying it.
+    pksav_gba_get_file_save_type(path, &gba_save_type);
+    if (gba_save_type != PKSAV_GBA_SAVE_TYPE_NONE)
+    {
+        *save_generation_type = SAVE_GENERATION_3;
+        return err;
+    }
+
+    pksav_gen2_get_file_save_type(path, &gen2_save_type);
+    if (gen2_save_type != PKSAV_GEN2_SAVE_TYPE_NONE)
+    {
+        *save_generation_type = SAVE_GENERATION_2;
+        return err;
+    }
+
+    SAVE_FILE_ERROR = PKSAV_ERROR_INVALID_SAVE;
+    *save_generation_type = SAVE_GENERATION_CORRUPTED;
+    return 0;
 }
 /**
  * @brief loads a save file from a path in the buffer
@@ -88,6 +96,23 @@ void load_savefile_from_path(const char *path, PokemonSave *pkmn_save)
         pkmn_save->save.gen2_save = save;
         break;
     }
+    case SAVE_GENERATION_3:
+    {
+        enum pksav_gba_save_type gba_save_type;
+        err = pksav_gba_get_file_save_type(path, &gba_save_type);
+        if (err != PKSAV_ERROR_NONE)
+        {
+            error_handler(err, "Error getting save type");
+        }
+        struct pksav_gba_save save;
+        err = pksav_gba_load_save_from_file(path, &save);
+        if (err != PKSAV_ERROR_NONE)
+        {
+            error_handler(err, "Error loading save");
+        }
+        pkmn_save->save.gba_save = save;
+        break;
+    }
     default:
         break;
     }
@@ -103,6 +128,10 @@ pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         err = pksav_gen1_save_save(path, &pkmn_save->save.gen1_save);
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        err = pksav_gba_save_save(path, &pkmn_save->save.gba_save);
     }
     else
     {
@@ -139,7 +168,12 @@ void load_display_files(const struct save_file_data *save_file_data, PokemonSave
             if (pkmn_saves[i].save_generation_type != SAVE_GENERATION_NONE)
             {
                 allocated_saves++;
-                save_file_size += pkmn_saves[i].save_generation_type == SAVE_GENERATION_1 ? sizeof(struct pksav_gen1_save) : sizeof(struct pksav_gen2_save);
+                if (pkmn_saves[i].save_generation_type == SAVE_GENERATION_1)
+                    save_file_size += sizeof(struct pksav_gen1_save);
+                else if (pkmn_saves[i].save_generation_type == SAVE_GENERATION_3)
+                    save_file_size += sizeof(struct pksav_gba_save);
+                else
+                    save_file_size += sizeof(struct pksav_gen2_save);
             }
             else
             {
@@ -175,6 +209,12 @@ void free_pkmn_saves(PokemonSave *pkmn_saves, uint8_t *save_file_count)
         case SAVE_GENERATION_2:
         {
             pksav_gen2_free_save(&pkmn_saves[i].save.gen2_save);
+            count++;
+            break;
+        }
+        case SAVE_GENERATION_3:
+        {
+            pksav_gba_free_save(&pkmn_saves[i].save.gba_save);
             count++;
             break;
         }

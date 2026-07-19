@@ -44,7 +44,7 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
     static bool show_duplicate_toast = false;
     save_file_count = save_file_data->num_saves;
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(RED);
 
     draw_background_grid();
@@ -88,7 +88,10 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
         // Update and draw save files
         for (int i = 0; i < save_file_data->num_saves; i++)
         {
-            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED;
+            // Gen 3 saves load but aren't yet supported by trading; gate them like
+            // corrupted saves (non-selectable) so they can't be opened and crash.
+            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED ||
+                                pkmn_saves[i].save_generation_type == SAVE_GENERATION_3;
             // bool is_corrupted = false;
             const Rectangle save_file_rec = (Rectangle){SCREEN_WIDTH / 2 - (SCREEN_WIDTH - 50) / 2, y_offset + (93 * i) - (60 * corrupted_count), SCREEN_WIDTH - 50, 80};
 
@@ -266,7 +269,7 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
         show_duplicate_toast = !draw_toast_message("Duplicate save files cannot trade with each other!", TOAST_LONG, TOAST_ERROR);
     }
 
-    EndDrawing();
+    end_virtual_frame();
 
     if (IsKeyPressed(KEY_ESCAPE))
     {

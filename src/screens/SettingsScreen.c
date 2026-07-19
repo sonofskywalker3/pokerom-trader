@@ -34,7 +34,7 @@ void draw_settings(struct save_file_data *save_file_data, GameScreen *current_sc
     };
     static int selected_index = BUTTON_NONE;
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(RED);
     draw_background_grid();
     DrawCircleSector((Vector2){SCREEN_WIDTH / 2, SCREEN_HEIGHT * 3.5}, 1350, 0, 360, 500, BLACK);
@@ -125,7 +125,7 @@ void draw_settings(struct save_file_data *save_file_data, GameScreen *current_sc
         draw_confirmation_modal(delete_modal_text, details_text, "Delete", on_delete_modal_submit, on_delete_modal_cancel, E_MODAL_WARN);
     }
 
-    EndDrawing();
+    end_virtual_frame();
 
     if (IsKeyPressed(KEY_ESCAPE))
     {

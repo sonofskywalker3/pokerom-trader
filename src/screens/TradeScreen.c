@@ -14,7 +14,7 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
     static bool show_trade_toast = false;
     static bool show_saving_icon = false;
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(RED);
     draw_background_grid();
 
@@ -167,7 +167,7 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
         show_saving_icon = draw_save_icon(SCREEN_WIDTH - 50, 10, show_saving_icon);
     }
 
-    EndDrawing();
+    end_virtual_frame();
 
     // ESCAPE nav back to file select
     if (IsKeyPressed(KEY_ESCAPE))

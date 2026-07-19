@@ -19,7 +19,7 @@
 #define NEXT_BUTTON_X SCREEN_WIDTH - 200
 #define NEXT_BUTTON_Y SCREEN_HEIGHT - 50
 
-#define SHOW_BILLS_PC 0
+#define SHOW_BILLS_PC 1
 #define MAX_FILE_PATH_CHAR 1001
 #define MAX_FILE_PATH_COUNT 100
 
@@ -51,6 +51,36 @@ struct TrainerSelection
     int trainer_index;
 };
 
+// Bill's PC (single-save box management)
+enum bills_pc_location
+{
+    BILLS_PC_LOC_PARTY = 0,
+    BILLS_PC_LOC_BOX = 1
+};
+
+// Sort keys available for a PC box
+enum bills_pc_sort_mode
+{
+    BILLS_PC_SORT_NONE = 0,
+    BILLS_PC_SORT_DEX,
+    BILLS_PC_SORT_NAME,
+    BILLS_PC_SORT_LEVEL,
+    BILLS_PC_SORT_TYPE,
+    BILLS_PC_SORT_COUNT
+};
+
+// Identifies a single storage slot in either the party or a PC box.
+// box_num is ignored when location is BILLS_PC_LOC_PARTY.
+struct bills_pc_slot
+{
+    enum bills_pc_location location;
+    int box_num;
+    int index;
+};
+
+// A type index used to mark "type unknown/unsupported" (e.g. Gen 2 Johto mons).
+#define BILLS_PC_TYPE_UNKNOWN ((uint8_t)0xFF)
+
 typedef enum
 {
     SCREEN_ERROR = -1,
@@ -81,6 +111,7 @@ typedef enum
     SAVE_GENERATION_NONE,
     SAVE_GENERATION_1,
     SAVE_GENERATION_2,
+    SAVE_GENERATION_3,
     SAVE_GENERATION_CORRUPTED,
 } SaveGenerationType;
 
@@ -88,6 +119,7 @@ typedef union
 {
     struct pksav_gen1_save gen1_save;
     struct pksav_gen2_save gen2_save;
+    struct pksav_gba_save gba_save;
 } SaveGeneration;
 
 typedef struct
@@ -121,6 +153,7 @@ enum textures
     T_QUIT,
     T_SETTINGS,
     T_TRADE,
+    T_BOXES,
     T_CONSOLE_0,
     T_CONSOLE_1,
     T_CONSOLE_2,

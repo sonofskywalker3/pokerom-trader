@@ -6,6 +6,7 @@ enum main_menu_buttons
     BUTTON_NONE = -1,
     BUTTON_TRADE,
     BUTTON_EVOLVE,
+    BUTTON_BILLS_PC,
     BUTTON_SETTINGS,
     BUTTON_QUIT,
     BUTTON_COUNT
@@ -19,7 +20,7 @@ const uint16_t offscreen_x = 415;
 const uint8_t console_x_offset = 70;
 
 // Details content animation position
-static int16_t anim_from_right[4] = {offscreen_x};
+static int16_t anim_from_right[BUTTON_COUNT] = {offscreen_x};
 // which button is currently being animated
 static int8_t active_anim_index = BUTTON_NONE;
 // which button is currently being hovered over
@@ -147,9 +148,73 @@ void draw_evolution_arrow_animation(void)
     frame_counter++;
 }
 
+// Draw a small PC-box icon (white screen with a grid of stored Pokémon)
+static void draw_pc_box_icon(int x, int y)
+{
+    DrawRectangle(x, y, 100, 74, BLACK);
+    DrawRectangle(x + 5, y + 5, 90, 64, WHITE);
+    for (int row = 0; row < 3; row++)
+    {
+        for (int col = 0; col < 4; col++)
+        {
+            DrawRectangle(x + 11 + col * 22, y + 10 + row * 20, 14, 14, COLOR_PKMN_RED);
+        }
+    }
+}
+
+// Draw a small Pokéball at (cx, cy)
+static void draw_mini_pokeball(int cx, int cy, int r)
+{
+    DrawCircle(cx, cy, r + 1, BLACK);
+    DrawCircle(cx, cy, r, RED);
+    DrawRectangle(cx - r, cy, 2 * r, r, WHITE);
+    DrawRectangle(cx - r, cy - 1, 2 * r, 2, BLACK);
+    DrawCircle(cx, cy, 3, WHITE);
+    DrawCircleLines(cx, cy, 3, BLACK);
+}
+
+// Boxes details animation: a Pokéball travels from the left box to the right box,
+// then blinks on arrival and repeats (mirrors the Trade/Evolve pane animations).
+static void draw_boxes_move_animation(void)
+{
+    static uint8_t frame_counter = 0;
+    static uint8_t step = 0;
+    const uint8_t travel_steps = 12; // frames spent crossing the gap
+    const uint8_t total_steps = 18;  // remaining steps = blink/hold on arrival
+
+    const int base_x = details_rec.x + anim_from_right[BUTTON_BILLS_PC];
+    const int box_y = details_rec.y + 150;
+
+    // Two PC boxes side by side
+    draw_pc_box_icon(base_x + 15, box_y);
+    draw_pc_box_icon(base_x + 185, box_y);
+
+    // Ball path: from just right of the left box to just left of the right box
+    const int from_x = base_x + 122;
+    const int to_x = base_x + 178;
+    const int ball_y = box_y + 37;
+
+    int travel = step < travel_steps ? step : travel_steps;
+    float t = travel / (float)travel_steps;
+    int ball_x = from_x + (int)((to_x - from_x) * t);
+
+    // While traveling: solid. On arrival: blink a couple times before repeating.
+    bool show = step < travel_steps ? true : (step % 2 == 0);
+    if (show)
+    {
+        draw_mini_pokeball(ball_x, ball_y, 7);
+    }
+
+    if (frame_counter % 5 == 0)
+    {
+        step = (uint8_t)((step + 1) % total_steps);
+    }
+    frame_counter++;
+}
+
 void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_screen, bool *should_close_window, Texture2D *textures)
 {
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(RED);
     draw_background_grid();
     
@@ -251,8 +316,32 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
         reset_anim_pos(BUTTON_EVOLVE);
     }
 
+    // On Hover/Click Boxes button
+    if (draw_menu_button(text_position_start.x + 30, text_position_start.y + (rec_height_offset * 2), "Boxes", text_size))
+    {
+        set_active_animation(BUTTON_BILLS_PC);
+    }
+
+    // Update/Draw animated Boxes details pane
+    if (active_anim_index == BUTTON_BILLS_PC)
+    {
+        // Move left/right
+        slide_animate_details_pane(BUTTON_BILLS_PC);
+        // Stylized "Boxes" header texture (matches Trade/Evolve styling)
+        DrawTextureEx(textures[T_BOXES], (Vector2){details_rec.x + anim_from_right[BUTTON_BILLS_PC], details_rec.y + 25}, 0, 1, WHITE);
+        // Two boxes with a Pokéball animating from one to the other
+        draw_boxes_move_animation();
+        // Bottom details text
+        DrawText("Access PC boxes and swap Pokemon", details_text.x + anim_from_right[BUTTON_BILLS_PC] + 40, details_text.y, 20, BLACK);
+    }
+    else
+    {
+        // Reset animation position to offscreen_x
+        reset_anim_pos(BUTTON_BILLS_PC);
+    }
+
     // On Hover/Click Settings button
-    if (draw_menu_button(text_position_start.x + 30, text_position_start.y + (rec_height_offset * 2), "Settings", text_size))
+    if (draw_menu_button(text_position_start.x + 45, text_position_start.y + (rec_height_offset * 3), "Settings", text_size))
     {
         set_active_animation(BUTTON_SETTINGS);
     }
@@ -274,7 +363,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Quit button
-    if (draw_menu_button(text_position_start.x + 45, text_position_start.y + (rec_height_offset * 3), "Quit", text_size))
+    if (draw_menu_button(text_position_start.x + 60, text_position_start.y + (rec_height_offset * 4), "Quit", text_size))
     {
         set_active_animation(BUTTON_QUIT);
     }
@@ -324,6 +413,18 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
             }
             break;
         }
+        case BUTTON_BILLS_PC:
+        {
+            // Selected Bill's PC and still hovering over Bill's PC button
+            if (active_hover_index == BUTTON_BILLS_PC)
+            {
+                no_dir_err = get_save_files(save_file_data);
+                *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
+                reset_all_anim_pos();
+                clear_active_animation();
+            }
+            break;
+        }
         case BUTTON_SETTINGS:
         {
             // Selected Settings and still hovering over Settings button
@@ -351,7 +452,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
         }
     }
 
-    EndDrawing();
+    end_virtual_frame();
 
     // Reset active hover index
     clear_active_animation();

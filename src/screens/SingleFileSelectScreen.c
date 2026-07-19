@@ -29,7 +29,7 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
     static int y_offset = 75;
     static int banner_position_offset = 0;
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(RED);
     draw_background_grid();
 
@@ -62,7 +62,12 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
         // Update and draw save files
         for (int i = 0; i < save_file_data->num_saves; i++)
         {
-            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED;
+            // Gen 3 box management is supported; Gen 3 is not yet supported by
+            // Evolve, so gate it there (like a corrupted save) but not for Boxes.
+            bool gen3_unsupported = pkmn_saves[i].save_generation_type == SAVE_GENERATION_3 &&
+                                    menu_type != SINGLE_PLAYER_MENU_TYPE_BILLS_PC;
+            bool is_corrupted = pkmn_saves[i].save_generation_type == SAVE_GENERATION_CORRUPTED ||
+                                gen3_unsupported;
             const Rectangle save_file_rec = (Rectangle){SCREEN_WIDTH / 2 - (SCREEN_WIDTH - 50) / 2, y_offset + (93 * i) - (60 * corrupted_count), SCREEN_WIDTH - 50, 80};
 
             if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT))
@@ -123,7 +128,8 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
     // Bottom bar
     DrawRectangleRec(bottom_bar_rec, WHITE);
     DrawLineEx((Vector2){bottom_bar_rec.x, bottom_bar_rec.y}, (Vector2){bottom_bar_rec.width, bottom_bar_rec.y}, 15, BLACK);
-    DrawText("Evolve >", evolve_button_rec.x + 15, evolve_button_rec.y + 10, 20, has_selected_save ? ui_selection == E_UI_EVOLVE ? LIGHTGRAY : BLACK : LIGHTGRAY);
+    const char *next_button_text = menu_type == SINGLE_PLAYER_MENU_TYPE_BILLS_PC ? "Boxes >" : "Evolve >";
+    DrawText(next_button_text, evolve_button_rec.x + 15, evolve_button_rec.y + 10, 20, has_selected_save ? ui_selection == E_UI_EVOLVE ? LIGHTGRAY : BLACK : LIGHTGRAY);
 
     // Back button
     const Rectangle back_button_rec = (Rectangle){BACK_BUTTON_X - 15, BACK_BUTTON_Y + 8, BUTTON_WIDTH, BUTTON_HEIGHT};
@@ -207,7 +213,7 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
         }
     }
 
-    EndDrawing();
+    end_virtual_frame();
     if (IsKeyPressed(KEY_ESCAPE))
     {
         *current_screen = SCREEN_MAIN_MENU;

@@ -31,7 +31,7 @@ int get_save_files(struct save_file_data *save_data)
 
     WIN32_FIND_DATA find_file_data;
     HANDLE hFind;
-    LPCSTR saves[MAX_FILE_PATH_CHAR];
+    char saves[MAX_FILE_PATH_CHAR];
     strcpy(saves, save_dir);
     strcat(saves, "\\*.sav");
 
@@ -152,7 +152,11 @@ struct config_data read_key_from_config(void)
     strcat(config_path, "\\config.ini");
 
     LPCSTR ini = config_path;
-    char save_file_str[MAX_FILE_PATH_CHAR];
+    // Static storage: struct config_data.save_file_dir is a pointer, and the
+    // caller reads it after this function returns. A local (stack) buffer here
+    // would be a dangling pointer, which previously caused the saved folder to
+    // be lost on every launch.
+    static char save_file_str[MAX_FILE_PATH_CHAR];
     GetPrivateProfileString("app", "SAVE_FILE_DIR", 0, save_file_str, MAX_FILE_PATH_CHAR, ini);
 
     return (struct config_data){
@@ -226,7 +230,7 @@ int delete_app_data(void)
 
     WIN32_FIND_DATA find_file_data;
     HANDLE hFind;
-    LPCSTR saves[MAX_FILE_PATH_CHAR];
+    char saves[MAX_FILE_PATH_CHAR];
     strcpy(saves, saves_dir);
     strcat(saves, "\\*.sav");
 
@@ -268,7 +272,7 @@ int delete_app_data(void)
     strcpy(logs_dir, config_path);
     strcat(logs_dir, "\\logs");
 
-    LPCSTR logs[MAX_FILE_PATH_CHAR];
+    char logs[MAX_FILE_PATH_CHAR];
     strcpy(logs, logs_dir);
     strcat(logs, "\\*.txt");
 
