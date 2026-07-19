@@ -44,6 +44,10 @@ void draw_no_save_files(char *save_path);
 void draw_top_banner(const char *text, const int *banner_position_offset);
 void draw_background_grid(void);
 void shadow_text(const char *text, int pos_x, int pos_y, int font_size, Color color);
+// Render the frame into a fixed-resolution target that is scaled to the
+// (resizable) window. Screens call these in place of BeginDrawing/EndDrawing.
+void begin_virtual_frame(void);
+void end_virtual_frame(void);
 void draw_raylib_screen_loop(
     struct save_file_data *save_file_data,
     struct trainer_info *trainer1,

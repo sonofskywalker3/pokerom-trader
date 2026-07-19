@@ -24,7 +24,7 @@ void draw_legal(GameScreen *current_screen)
     };
     static int selected_index = SCREEN_BUTTON_NONE;
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(BACKGROUND_COLOR);
     DrawText("Disclaimer", 50, 50, 20, BLACK);
     for (int i = 0; i < 13; i++)
@@ -53,7 +53,7 @@ void draw_legal(GameScreen *current_screen)
             selected_index = SCREEN_BUTTON_NONE;
         }
     }
-    EndDrawing();
+    end_virtual_frame();
 
     if (IsKeyPressed(KEY_ESCAPE))
     {

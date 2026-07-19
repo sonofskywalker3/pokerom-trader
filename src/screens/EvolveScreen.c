@@ -70,7 +70,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     // Call rng
     generate_rand_num_step(save_generation_type);
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(RED);
     draw_background_grid();
     DrawTextureEx(*evolve_texture, (Vector2){50, 10}, 0, 0.8, WHITE);
@@ -312,7 +312,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
         show_evolve_toast = !draw_toast_message("Evolved Successfully!", TOAST_SHORT, TOAST_INFO);
     }
 
-    EndDrawing();
+    end_virtual_frame();
 
     if (IsKeyPressed(KEY_ESCAPE))
     {

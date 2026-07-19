@@ -77,6 +77,45 @@ static const struct pkmn_evolution_pair_data pkmn_evolution_pairs_gen2[MAX_SPECI
     [PORYGON] = {.species_name = "PORYGON", .evolution_name = "PORYGON2", .species_index = PORYGON, .evolution_index = PORYGON2, .evolution_item = UPGRADE},
     [SEADRA] = {.species_name = "SEADRA", .evolution_name = "KINGDRA", .species_index = SEADRA, .evolution_index = KINGDRA, .evolution_item = DRAGON_SCALE}};
 
+// A normalized, gen-agnostic view of a stored Pokémon for listing/sorting/searching.
+struct bills_pc_entry_view
+{
+    bool occupied;
+    char nickname[PKMN_NAME_TEXT_MAX + 1];
+    uint16_t species; // gen-native species index (Gen 1/3 internal, Gen 2 dex id)
+    uint16_t dex;     // National Pokédex number
+    uint8_t level;    // 0 when unknown (Gen 3 boxed mons store no level)
+    uint8_t type1;    // Gen 1 type enum value, or BILLS_PC_TYPE_UNKNOWN
+    uint8_t type2;
+};
+
+// Sort every PC box's contents at once: all boxed Pokémon are gathered, sorted,
+// and repacked box-by-box (party untouched). Persisted like a per-box sort.
+void bills_pc_sort_all_boxes(PokemonSave *pkmn_save, enum bills_pc_sort_mode mode);
+
+// --- Bill's PC (single-save box management) ---
+int bills_pc_num_boxes(const PokemonSave *pkmn_save);
+int bills_pc_box_capacity(const PokemonSave *pkmn_save);
+int bills_pc_party_capacity(const PokemonSave *pkmn_save);
+int bills_pc_current_box_num(const PokemonSave *pkmn_save);
+int bills_pc_container_count(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num);
+void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index, struct bills_pc_entry_view *out_view);
+bool bills_pc_slot_holds_mail(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index);
+// Move (deposit/withdraw) or swap a Pokémon between two slots within one save.
+// Returns error_none on success, or a pksavhelper_error describing why it was rejected.
+pksavhelper_error bills_pc_move_pkmn(PokemonSave *pkmn_save, struct bills_pc_slot src, struct bills_pc_slot dst);
+void bills_pc_sort_box(PokemonSave *pkmn_save, int box_num, enum bills_pc_sort_mode mode);
+// Copy the (possibly stale) numbered current box into the live current-box buffer.
+// Call once when entering Bill's PC.
+void bills_pc_normalize_current_box(PokemonSave *pkmn_save);
+// Copy the edited numbered current box back into the live current-box buffer.
+// Call right before writing the save.
+void bills_pc_flush_current_box(PokemonSave *pkmn_save);
+const char *pkmn_type_name(uint8_t gen1_type_value);
+void bills_pc_species_types(const PokemonSave *pkmn_save, uint16_t species, uint8_t *out_type1, uint8_t *out_type2);
+// True if the given slot holds a Pokémon (handles Gen 3 boxes' non-contiguous slots).
+bool bills_pc_slot_occupied(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index);
+
 int error_handler(enum pksav_error error, const char *message);
 void swap_party_pkmn_at_indices(struct pksav_gen2_save *pkmn_save, uint8_t pkmn_index1, uint8_t pkmn_index2); // TODO: Update for cross-generation
 pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, PokemonSave *player2_save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2);

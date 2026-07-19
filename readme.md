@@ -1,5 +1,12 @@
 # Pokerom Trader - Pokémon Save File Trading GUI
 
+> **Fork notice:** This is a fork of [savaughn/pokerom-trader](https://github.com/savaughn/pokerom-trader)
+> by Spencer Vaughn (MIT), which builds on the [PKSav](https://github.com/savaughn/pksav) library (MIT).
+> This fork adds **Generation 3 (GBA) support** and an expanded **Boxes** (Bill's PC) box-management
+> feature. All original attribution and the MIT license are retained; see [LICENSE](LICENSE) and
+> [Acknowledgments](#acknowledgments). Gen 3 base-stat / growth-rate data was compiled from
+> [Bulbapedia](https://bulbapedia.bulbagarden.net) and [Serebii](https://www.serebii.net).
+
 ![main_menu](https://github.com/savaughn/pokerom-trader/assets/25937456/78ef12ba-b04c-471d-a1b2-36bc55ab731e)
 
 #
@@ -13,6 +20,10 @@ Pokerom Trader is an open-source project that simplifies the process of trading 
 - Trade - Allows a user to trade Pokémon between save files
 - Evolve - A shortcut for evolving Pokémon that only evolve through trading
   - This replicates a trade, the evolution, and a trade back to OT
+- Boxes - Full PC box management for a single save file
+  - Browse the party and every PC box, deposit / withdraw / swap Pokémon, and reorganize between boxes
+  - Sort a box by name, level, or type
+  - Search by name, type, or level
 - Save backup - Automatically backs up save files in the same directory before writing to them
 
 ### Settings 
@@ -33,6 +44,8 @@ Pokerom Trader is an open-source project that simplifies the process of trading 
 - Cross-gen trading (Gen 1 <-> Gen 2)
 - Gen 1 trade evolutions
 - Gen 2 trade evolutions
+- Boxes: PC box management (Gen 1 and Gen 2): deposit/withdraw/swap between party and boxes, box-to-box moves, sort, and search
+  - Note: mail-holding Gen 2 Pokémon can't be deposited (mail can't be stored in a box, as in the real games); type sort/search covers the 151 Kanto Pokémon
 
 *Perfect Crystal save files seem to work.
 

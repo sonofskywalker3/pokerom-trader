@@ -1,9 +1,12 @@
 #include <stdio.h>
 #include <string.h>
+#include <ctype.h>
 #include <math.h>
 #include <time.h>
 #include "pksavhelper.h"
 #include "filehelper.h"
+#include "gen3_species.h"
+#include "gen3_stats.h"
 
 int error_handler(enum pksav_error error, const char *message)
 {
@@ -142,6 +145,15 @@ void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer)
         {
             trainer->trainer_mail[i] = pkmn_save->save.gen2_save.pokemon_storage.p_party_mail->party_mail[i];
         }
+        break;
+    }
+    case SAVE_GENERATION_3:
+    {
+        char trainer_name[TRAINER_NAME_TEXT_MAX + 1] = "\0";
+        pksav_gba_import_text(pkmn_save->save.gba_save.player_info.p_name, trainer_name, TRAINER_NAME_TEXT_MAX);
+        strcpy(trainer->trainer_name, trainer_name);
+        trainer->trainer_id = pksav_littleendian16(pkmn_save->save.gba_save.player_info.p_id->pid);
+        trainer->trainer_generation = SAVE_GENERATION_3;
         break;
     }
     default:
@@ -846,5 +858,1219 @@ void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_in
 
         // Update condition to none
         pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].party_data.condition = PKSAV_CONDITION_NONE;
+    }
+}
+
+/************************************************************************
+ * Bill's PC — single-save box management (view, sort, move/swap)
+ *
+ * Data model notes:
+ *  - Boxes live in pokemon_storage.pp_boxes[]. The "current" box is also
+ *    mirrored in p_current_box; on a normal in-game save the two agree.
+ *    We normalize p_current_box -> pp_boxes[current] on entry and flush it
+ *    back before writing, so all editing happens against pp_boxes[].
+ *  - Box entries store only pksav_gen*_pc_pokemon. Party slots store
+ *    pksav_gen*_party_pokemon (pc_data + derived party_data). Moving a mon
+ *    into the party therefore regenerates party_data from the pc_data.
+ ************************************************************************/
+
+#define BILLS_PC_NAME_STORAGE (PKMN_NAME_TEXT_MAX + 1)
+
+// Case-insensitive string compare (portable, avoids platform strcasecmp).
+static int bills_pc_ci_strcmp(const char *a, const char *b)
+{
+    while (*a && *b)
+    {
+        int ca = tolower((unsigned char)*a);
+        int cb = tolower((unsigned char)*b);
+        if (ca != cb)
+        {
+            return ca - cb;
+        }
+        a++;
+        b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+const char *pkmn_type_name(uint8_t gen1_type_value)
+{
+    switch (gen1_type_value)
+    {
+    case PKSAV_GEN1_TYPE_NORMAL:   return "NORMAL";
+    case PKSAV_GEN1_TYPE_FIGHTING: return "FIGHTING";
+    case PKSAV_GEN1_TYPE_FLYING:   return "FLYING";
+    case PKSAV_GEN1_TYPE_POISON:   return "POISON";
+    case PKSAV_GEN1_TYPE_GROUND:   return "GROUND";
+    case PKSAV_GEN1_TYPE_ROCK:     return "ROCK";
+    case PKSAV_GEN1_TYPE_BUG:      return "BUG";
+    case PKSAV_GEN1_TYPE_GHOST:    return "GHOST";
+    case PKSAV_GEN1_TYPE_FIRE:     return "FIRE";
+    case PKSAV_GEN1_TYPE_WATER:    return "WATER";
+    case PKSAV_GEN1_TYPE_GRASS:    return "GRASS";
+    case PKSAV_GEN1_TYPE_ELECTRIC: return "ELECTRIC";
+    case PKSAV_GEN1_TYPE_PSYCHIC:  return "PSYCHIC";
+    case PKSAV_GEN1_TYPE_ICE:      return "ICE";
+    case PKSAV_GEN1_TYPE_DRAGON:   return "DRAGON";
+    default:                       return "?";
+    }
+}
+
+void bills_pc_species_types(const PokemonSave *pkmn_save, uint16_t species, uint8_t *out_type1, uint8_t *out_type2)
+{
+    uint8_t t1 = BILLS_PC_TYPE_UNKNOWN;
+    uint8_t t2 = BILLS_PC_TYPE_UNKNOWN;
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        if (species <= SI_VICTREEBEL)
+        {
+            t1 = pkmn_base_stats_gen1[species].types[0];
+            t2 = pkmn_base_stats_gen1[species].types[1];
+        }
+    }
+    else
+    {
+        // Gen 2 species index is the dex id; for Gen 3 the caller passes the
+        // National Dex number. Type data is only available for the 151 Kanto
+        // mons (mapped through the Gen 1 base-stat table).
+        if (species >= 1 && species <= MEW)
+        {
+            uint8_t gen1_index = species_gen2_to_gen1[species];
+            if (gen1_index != 0 && gen1_index <= SI_VICTREEBEL)
+            {
+                t1 = pkmn_base_stats_gen1[gen1_index].types[0];
+                t2 = pkmn_base_stats_gen1[gen1_index].types[1];
+            }
+        }
+    }
+
+    if (out_type1)
+    {
+        *out_type1 = t1;
+    }
+    if (out_type2)
+    {
+        *out_type2 = t2;
+    }
+}
+
+int bills_pc_num_boxes(const PokemonSave *pkmn_save)
+{
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+        return PKSAV_GEN1_NUM_POKEMON_BOXES;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+        return PKSAV_GBA_NUM_POKEMON_BOXES;
+    return PKSAV_GEN2_NUM_POKEMON_BOXES;
+}
+
+int bills_pc_box_capacity(const PokemonSave *pkmn_save)
+{
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+        return PKSAV_GEN1_BOX_NUM_POKEMON;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+        return PKSAV_GBA_BOX_NUM_POKEMON;
+    return PKSAV_GEN2_BOX_NUM_POKEMON;
+}
+
+int bills_pc_party_capacity(const PokemonSave *pkmn_save)
+{
+    (void)pkmn_save;
+    return PKSAV_STANDARD_POKEMON_PARTY_SIZE;
+}
+
+int bills_pc_current_box_num(const PokemonSave *pkmn_save)
+{
+    int num_boxes = bills_pc_num_boxes(pkmn_save);
+    int cur;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        cur = *pkmn_save->save.gen1_save.pokemon_storage.p_current_box_num & PKSAV_GEN1_CURRENT_POKEMON_BOX_NUM_MASK;
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        cur = (int)pkmn_save->save.gba_save.pokemon_storage.p_pc->current_box;
+    }
+    else
+    {
+        cur = *pkmn_save->save.gen2_save.pokemon_storage.p_current_box_num & 0x0F;
+    }
+    if (cur < 0 || cur >= num_boxes)
+    {
+        cur = 0;
+    }
+    return cur;
+}
+
+// Gen 3 boxes have no count field and allow gaps; a slot is occupied when its
+// growth-block species index is non-zero.
+static bool gba_box_slot_occupied(const PokemonSave *pkmn_save, int box_num, int index)
+{
+    return pkmn_save->save.gba_save.pokemon_storage.p_pc->boxes[box_num].entries[index].blocks.growth.species != 0;
+}
+
+bool bills_pc_slot_occupied(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index)
+{
+    if (index < 0)
+    {
+        return false;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            return index < (int)pkmn_save->save.gba_save.pokemon_storage.p_party->count && index < PKSAV_GBA_PARTY_NUM_POKEMON;
+        }
+        return index < PKSAV_GBA_BOX_NUM_POKEMON && gba_box_slot_occupied(pkmn_save, box_num, index);
+    }
+    // Gen 1/2 containers are contiguous.
+    return index < bills_pc_container_count(pkmn_save, location, box_num);
+}
+
+int bills_pc_container_count(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num)
+{
+    int count;
+    int capacity;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            count = (int)pkmn_save->save.gba_save.pokemon_storage.p_party->count;
+            capacity = PKSAV_GBA_PARTY_NUM_POKEMON;
+        }
+        else
+        {
+            // No count field: count the occupied (non-empty) slots.
+            count = 0;
+            for (int i = 0; i < PKSAV_GBA_BOX_NUM_POKEMON; i++)
+            {
+                if (gba_box_slot_occupied(pkmn_save, box_num, i))
+                {
+                    count++;
+                }
+            }
+            capacity = PKSAV_GBA_BOX_NUM_POKEMON;
+        }
+        if (count < 0 || count > capacity)
+        {
+            count = 0;
+        }
+        return count;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            count = pkmn_save->save.gen1_save.pokemon_storage.p_party->count;
+            capacity = PKSAV_GEN1_PARTY_NUM_POKEMON;
+        }
+        else
+        {
+            count = pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[box_num]->count;
+            capacity = PKSAV_GEN1_BOX_NUM_POKEMON;
+        }
+    }
+    else
+    {
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            count = pkmn_save->save.gen2_save.pokemon_storage.p_party->count;
+            capacity = PKSAV_GEN2_PARTY_NUM_POKEMON;
+        }
+        else
+        {
+            count = pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[box_num]->count;
+            capacity = PKSAV_GEN2_BOX_NUM_POKEMON;
+        }
+    }
+    // Guard against uninitialized/garbage counts (e.g. 0xFF in an empty box).
+    if (count < 0 || count > capacity)
+    {
+        count = 0;
+    }
+    return count;
+}
+
+void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index, struct bills_pc_entry_view *out_view)
+{
+    memset(out_view, 0, sizeof(*out_view));
+    out_view->type1 = BILLS_PC_TYPE_UNKNOWN;
+    out_view->type2 = BILLS_PC_TYPE_UNKNOWN;
+
+    if (!bills_pc_slot_occupied(pkmn_save, location, box_num, index))
+    {
+        out_view->occupied = false;
+        return;
+    }
+    out_view->occupied = true;
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        const struct pksav_gba_pokemon_storage *storage = &pkmn_save->save.gba_save.pokemon_storage;
+        const struct pksav_gba_pc_pokemon *pc;
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            pc = &storage->p_party->party[index].pc_data;
+            out_view->level = storage->p_party->party[index].party_data.level;
+        }
+        else
+        {
+            pc = &storage->p_pc->boxes[box_num].entries[index];
+            out_view->level = 0; // Gen 3 boxed mons store no level (derived from EXP)
+        }
+        out_view->species = pc->blocks.growth.species; // internal index
+        out_view->dex = gen3_internal_to_national(pc->blocks.growth.species);
+        pksav_gba_import_text(pc->nickname, out_view->nickname, PKMN_NAME_TEXT_MAX);
+        // Types via National Dex (Kanto 1-151 only; Hoenn/Johto show unknown).
+        bills_pc_species_types(pkmn_save, out_view->dex, &out_view->type1, &out_view->type2);
+        return;
+    }
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        const struct pksav_gen1_pokemon_storage *storage = &pkmn_save->save.gen1_save.pokemon_storage;
+        const uint8_t *species_arr;
+        const uint8_t (*nicknames)[PKSAV_GEN1_POKEMON_NICKNAME_LENGTH + 1];
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            species_arr = storage->p_party->species;
+            nicknames = storage->p_party->nicknames;
+            out_view->level = storage->p_party->party[index].pc_data.level;
+        }
+        else
+        {
+            species_arr = storage->pp_boxes[box_num]->species;
+            nicknames = storage->pp_boxes[box_num]->nicknames;
+            out_view->level = storage->pp_boxes[box_num]->entries[index].level;
+        }
+        out_view->species = species_arr[index];
+        pksav_gen1_import_text(nicknames[index], out_view->nickname, PKMN_NAME_TEXT_MAX);
+    }
+    else
+    {
+        const struct pksav_gen2_pokemon_storage *storage = &pkmn_save->save.gen2_save.pokemon_storage;
+        const uint8_t *species_arr;
+        const uint8_t (*nicknames)[PKSAV_GEN2_POKEMON_NICKNAME_LENGTH + 1];
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            species_arr = storage->p_party->species;
+            nicknames = storage->p_party->nicknames;
+            out_view->level = storage->p_party->party[index].pc_data.level;
+        }
+        else
+        {
+            species_arr = storage->pp_boxes[box_num]->species;
+            nicknames = storage->pp_boxes[box_num]->nicknames;
+            out_view->level = storage->pp_boxes[box_num]->entries[index].level;
+        }
+        out_view->species = species_arr[index];
+        pksav_gen2_import_text(nicknames[index], out_view->nickname, PKMN_NAME_TEXT_MAX);
+    }
+
+    bills_pc_species_types(pkmn_save, out_view->species, &out_view->type1, &out_view->type2);
+
+    // National Pokédex number (Gen 2 species index already is the dex id).
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        out_view->dex = out_view->species <= SI_VICTREEBEL ? species_gen1_to_gen2[out_view->species] : 0;
+    }
+    else
+    {
+        out_view->dex = out_view->species;
+    }
+}
+
+bool bills_pc_slot_holds_mail(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index)
+{
+    (void)box_num;
+    if (pkmn_save->save_generation_type != SAVE_GENERATION_2 || location != BILLS_PC_LOC_PARTY)
+    {
+        return false;
+    }
+    if (index < 0 || index >= PKSAV_GEN2_PARTY_NUM_POKEMON)
+    {
+        return false;
+    }
+    return pkmn_save->save.gen2_save.pokemon_storage.p_party_mail->party_mail[index].item_id != 0;
+}
+
+// -------------------- Gen 1 container abstraction --------------------
+
+struct g1_ctx
+{
+    uint8_t *count;
+    uint8_t *species; // [capacity + 1], terminated with 0xFF
+    struct pksav_gen1_pc_pokemon *entries;    // non-NULL for a box
+    struct pksav_gen1_party_pokemon *party;   // non-NULL for the party
+    uint8_t (*otnames)[PKSAV_GEN1_POKEMON_OTNAME_STORAGE_LENGTH + 1];
+    uint8_t (*nicknames)[PKSAV_GEN1_POKEMON_NICKNAME_LENGTH + 1];
+    int capacity;
+    bool is_party;
+};
+
+struct g1_mon
+{
+    struct pksav_gen1_pc_pokemon pc;
+    uint8_t species;
+    uint8_t otname[PKSAV_GEN1_POKEMON_OTNAME_STORAGE_LENGTH + 1];
+    uint8_t nickname[PKSAV_GEN1_POKEMON_NICKNAME_LENGTH + 1];
+};
+
+static struct g1_ctx g1_get(PokemonSave *s, enum bills_pc_location loc, int box)
+{
+    struct g1_ctx c = {0};
+    struct pksav_gen1_pokemon_storage *st = &s->save.gen1_save.pokemon_storage;
+    if (loc == BILLS_PC_LOC_PARTY)
+    {
+        c.count = &st->p_party->count;
+        c.species = st->p_party->species;
+        c.party = st->p_party->party;
+        c.otnames = st->p_party->otnames;
+        c.nicknames = st->p_party->nicknames;
+        c.capacity = PKSAV_GEN1_PARTY_NUM_POKEMON;
+        c.is_party = true;
+    }
+    else
+    {
+        struct pksav_gen1_pokemon_box *b = st->pp_boxes[box];
+        c.count = &b->count;
+        c.species = b->species;
+        c.entries = b->entries;
+        c.otnames = b->otnames;
+        c.nicknames = b->nicknames;
+        c.capacity = PKSAV_GEN1_BOX_NUM_POKEMON;
+        c.is_party = false;
+    }
+    return c;
+}
+
+static void g1_capture(struct g1_ctx *c, int i, struct g1_mon *m)
+{
+    m->pc = c->is_party ? c->party[i].pc_data : c->entries[i];
+    m->species = c->species[i];
+    memcpy(m->otname, c->otnames[i], sizeof(m->otname));
+    memcpy(m->nickname, c->nicknames[i], sizeof(m->nickname));
+}
+
+// Recompute the derived party data for the Gen 1 party slot at index i.
+static void g1_finalize_party(PokemonSave *s, int i)
+{
+    struct pksav_gen1_party_pokemon *p = &s->save.gen1_save.pokemon_storage.p_party->party[i];
+    p->party_data.level = p->pc_data.level;
+    update_pkmn_stats(s, i); // fills max_hp/atk/... and pc_data.current_hp
+    p->pc_data.condition = PKSAV_GB_CONDITION_NONE;
+}
+
+static void g1_write(PokemonSave *s, struct g1_ctx *c, int i, const struct g1_mon *m)
+{
+    if (c->is_party)
+    {
+        c->party[i].pc_data = m->pc;
+    }
+    else
+    {
+        c->entries[i] = m->pc;
+    }
+    c->species[i] = m->species;
+    memcpy(c->otnames[i], m->otname, sizeof(c->otnames[i]));
+    memcpy(c->nicknames[i], m->nickname, sizeof(c->nicknames[i]));
+    (void)s;
+}
+
+static void g1_remove(struct g1_ctx *c, int k)
+{
+    int n = *c->count;
+    for (int i = k; i < n - 1; i++)
+    {
+        if (c->is_party)
+        {
+            c->party[i] = c->party[i + 1];
+        }
+        else
+        {
+            c->entries[i] = c->entries[i + 1];
+        }
+        c->species[i] = c->species[i + 1];
+        memcpy(c->otnames[i], c->otnames[i + 1], sizeof(c->otnames[i]));
+        memcpy(c->nicknames[i], c->nicknames[i + 1], sizeof(c->nicknames[i]));
+    }
+    (*c->count)--;
+    c->species[*c->count] = 0xFF;
+}
+
+static int g1_append(PokemonSave *s, struct g1_ctx *c, const struct g1_mon *m)
+{
+    int i = *c->count;
+    g1_write(s, c, i, m);
+    (*c->count)++;
+    c->species[*c->count] = 0xFF;
+    if (c->is_party)
+    {
+        g1_finalize_party(s, i);
+    }
+    return i;
+}
+
+static pksavhelper_error bills_pc_move_gen1(PokemonSave *s, struct bills_pc_slot src, struct bills_pc_slot dst)
+{
+    struct g1_ctx sc = g1_get(s, src.location, src.box_num);
+    struct g1_ctx dc = g1_get(s, dst.location, dst.box_num);
+    bool same_container = (src.location == dst.location) &&
+                          (src.location == BILLS_PC_LOC_PARTY || src.box_num == dst.box_num);
+
+    int scount = *sc.count;
+    if (src.index < 0 || src.index >= scount)
+    {
+        return error_swap_pkmn; // source must be occupied
+    }
+    bool dst_occupied = dst.index >= 0 && dst.index < *dc.count;
+
+    if (same_container && !dst_occupied)
+    {
+        return error_none; // no-op; use sort to reorder within a container
+    }
+
+    if (dst_occupied)
+    {
+        struct g1_mon a, b;
+        g1_capture(&sc, src.index, &a);
+        g1_capture(&dc, dst.index, &b);
+        g1_write(s, &sc, src.index, &b);
+        g1_write(s, &dc, dst.index, &a);
+        if (sc.is_party)
+        {
+            g1_finalize_party(s, src.index);
+        }
+        if (dc.is_party)
+        {
+            g1_finalize_party(s, dst.index);
+        }
+        return error_none;
+    }
+
+    // Move into an empty destination (deposit/withdraw).
+    if (*dc.count >= dc.capacity)
+    {
+        return error_swap_pkmn; // destination full
+    }
+    if (sc.is_party && *sc.count <= 1)
+    {
+        return error_swap_pkmn; // cannot leave the party empty
+    }
+    struct g1_mon m;
+    g1_capture(&sc, src.index, &m);
+    g1_append(s, &dc, &m);
+    g1_remove(&sc, src.index);
+    return error_none;
+}
+
+// -------------------- Gen 2 container abstraction --------------------
+
+struct g2_ctx
+{
+    uint8_t *count;
+    uint8_t *species;
+    struct pksav_gen2_pc_pokemon *entries;
+    struct pksav_gen2_party_pokemon *party;
+    uint8_t (*otnames)[PKSAV_GEN2_POKEMON_OTNAME_STORAGE_LENGTH + 1];
+    uint8_t (*nicknames)[PKSAV_GEN2_POKEMON_NICKNAME_LENGTH + 1];
+    int capacity;
+    bool is_party;
+};
+
+struct g2_mon
+{
+    struct pksav_gen2_pc_pokemon pc;
+    uint8_t species;
+    uint8_t otname[PKSAV_GEN2_POKEMON_OTNAME_STORAGE_LENGTH + 1];
+    uint8_t nickname[PKSAV_GEN2_POKEMON_NICKNAME_LENGTH + 1];
+};
+
+static struct g2_ctx g2_get(PokemonSave *s, enum bills_pc_location loc, int box)
+{
+    struct g2_ctx c = {0};
+    struct pksav_gen2_pokemon_storage *st = &s->save.gen2_save.pokemon_storage;
+    if (loc == BILLS_PC_LOC_PARTY)
+    {
+        c.count = &st->p_party->count;
+        c.species = st->p_party->species;
+        c.party = st->p_party->party;
+        c.otnames = st->p_party->otnames;
+        c.nicknames = st->p_party->nicknames;
+        c.capacity = PKSAV_GEN2_PARTY_NUM_POKEMON;
+        c.is_party = true;
+    }
+    else
+    {
+        struct pksav_gen2_pokemon_box *b = st->pp_boxes[box];
+        c.count = &b->count;
+        c.species = b->species;
+        c.entries = b->entries;
+        c.otnames = b->otnames;
+        c.nicknames = b->nicknames;
+        c.capacity = PKSAV_GEN2_BOX_NUM_POKEMON;
+        c.is_party = false;
+    }
+    return c;
+}
+
+static void g2_capture(struct g2_ctx *c, int i, struct g2_mon *m)
+{
+    m->pc = c->is_party ? c->party[i].pc_data : c->entries[i];
+    m->species = c->species[i];
+    memcpy(m->otname, c->otnames[i], sizeof(m->otname));
+    memcpy(m->nickname, c->nicknames[i], sizeof(m->nickname));
+}
+
+static void g2_finalize_party(PokemonSave *s, int i)
+{
+    struct pksav_gen2_party_pokemon *p = &s->save.gen2_save.pokemon_storage.p_party->party[i];
+    update_pkmn_stats(s, i); // fills party_data stats and current_hp (reads pc_data.level)
+    p->party_data.condition = PKSAV_CONDITION_NONE;
+}
+
+static void g2_write(PokemonSave *s, struct g2_ctx *c, int i, const struct g2_mon *m)
+{
+    if (c->is_party)
+    {
+        c->party[i].pc_data = m->pc;
+    }
+    else
+    {
+        c->entries[i] = m->pc;
+    }
+    c->species[i] = m->species;
+    memcpy(c->otnames[i], m->otname, sizeof(c->otnames[i]));
+    memcpy(c->nicknames[i], m->nickname, sizeof(c->nicknames[i]));
+    (void)s;
+}
+
+static bool g2_party_has_mail(PokemonSave *s, int i)
+{
+    return s->save.gen2_save.pokemon_storage.p_party_mail->party_mail[i].item_id != 0;
+}
+
+static void g2_clear_party_mail(PokemonSave *s, int i)
+{
+    struct pksav_gen2_party_mail *pm = s->save.gen2_save.pokemon_storage.p_party_mail;
+    memset(&pm->party_mail[i], 0, sizeof(struct pksav_gen2_mail_msg));
+    memset(&pm->party_mail_backup[i], 0, sizeof(struct pksav_gen2_mail_msg));
+}
+
+static void g2_swap_party_mail(PokemonSave *s, int i, int j)
+{
+    struct pksav_gen2_party_mail *pm = s->save.gen2_save.pokemon_storage.p_party_mail;
+    struct pksav_gen2_mail_msg tmp = pm->party_mail[i];
+    pm->party_mail[i] = pm->party_mail[j];
+    pm->party_mail[j] = tmp;
+    tmp = pm->party_mail_backup[i];
+    pm->party_mail_backup[i] = pm->party_mail_backup[j];
+    pm->party_mail_backup[j] = tmp;
+}
+
+// Shift the party mail array down after removing party index k (n = pre-removal count).
+static void g2_mail_remove(PokemonSave *s, int k, int n)
+{
+    struct pksav_gen2_party_mail *pm = s->save.gen2_save.pokemon_storage.p_party_mail;
+    for (int i = k; i < n - 1; i++)
+    {
+        pm->party_mail[i] = pm->party_mail[i + 1];
+        pm->party_mail_backup[i] = pm->party_mail_backup[i + 1];
+    }
+    g2_clear_party_mail(s, n - 1);
+}
+
+static void g2_remove(struct g2_ctx *c, int k)
+{
+    int n = *c->count;
+    for (int i = k; i < n - 1; i++)
+    {
+        if (c->is_party)
+        {
+            c->party[i] = c->party[i + 1];
+        }
+        else
+        {
+            c->entries[i] = c->entries[i + 1];
+        }
+        c->species[i] = c->species[i + 1];
+        memcpy(c->otnames[i], c->otnames[i + 1], sizeof(c->otnames[i]));
+        memcpy(c->nicknames[i], c->nicknames[i + 1], sizeof(c->nicknames[i]));
+    }
+    (*c->count)--;
+    c->species[*c->count] = 0xFF;
+}
+
+static int g2_append(PokemonSave *s, struct g2_ctx *c, const struct g2_mon *m)
+{
+    int i = *c->count;
+    g2_write(s, c, i, m);
+    (*c->count)++;
+    c->species[*c->count] = 0xFF;
+    if (c->is_party)
+    {
+        g2_finalize_party(s, i);
+    }
+    return i;
+}
+
+static pksavhelper_error bills_pc_move_gen2(PokemonSave *s, struct bills_pc_slot src, struct bills_pc_slot dst)
+{
+    struct g2_ctx sc = g2_get(s, src.location, src.box_num);
+    struct g2_ctx dc = g2_get(s, dst.location, dst.box_num);
+    bool same_container = (src.location == dst.location) &&
+                          (src.location == BILLS_PC_LOC_PARTY || src.box_num == dst.box_num);
+
+    int scount = *sc.count;
+    if (src.index < 0 || src.index >= scount)
+    {
+        return error_swap_pkmn;
+    }
+    bool dst_occupied = dst.index >= 0 && dst.index < *dc.count;
+
+    // A party mon carrying mail cannot be stored in a box.
+    if (sc.is_party && !dc.is_party && g2_party_has_mail(s, src.index))
+    {
+        return error_swap_pkmn;
+    }
+    if (!sc.is_party && dc.is_party && dst_occupied && g2_party_has_mail(s, dst.index))
+    {
+        return error_swap_pkmn;
+    }
+
+    if (same_container && !dst_occupied)
+    {
+        return error_none;
+    }
+
+    if (dst_occupied)
+    {
+        struct g2_mon a, b;
+        g2_capture(&sc, src.index, &a);
+        g2_capture(&dc, dst.index, &b);
+        g2_write(s, &sc, src.index, &b);
+        g2_write(s, &dc, dst.index, &a);
+        if (sc.is_party)
+        {
+            g2_finalize_party(s, src.index);
+        }
+        if (dc.is_party)
+        {
+            g2_finalize_party(s, dst.index);
+        }
+        // Reconcile mail so it stays attached to the party slot it belongs to.
+        if (sc.is_party && dc.is_party)
+        {
+            g2_swap_party_mail(s, src.index, dst.index);
+        }
+        else if (sc.is_party && !dc.is_party)
+        {
+            g2_clear_party_mail(s, src.index); // now holds the former box mon
+        }
+        else if (!sc.is_party && dc.is_party)
+        {
+            g2_clear_party_mail(s, dst.index); // now holds the former box mon
+        }
+        return error_none;
+    }
+
+    if (*dc.count >= dc.capacity)
+    {
+        return error_swap_pkmn;
+    }
+    if (sc.is_party && *sc.count <= 1)
+    {
+        return error_swap_pkmn;
+    }
+    struct g2_mon m;
+    g2_capture(&sc, src.index, &m);
+    int new_index = g2_append(s, &dc, &m);
+    if (dc.is_party)
+    {
+        g2_clear_party_mail(s, new_index); // withdrawn box mon starts with no mail
+    }
+    g2_remove(&sc, src.index);
+    if (sc.is_party)
+    {
+        g2_mail_remove(s, src.index, scount);
+    }
+    return error_none;
+}
+
+// -------------------- Gen 3 (GBA) moves --------------------
+//
+// Gen 3 boxes are slot-based (30 raw slots, gaps allowed, no count) so box↔box
+// moves/swaps are plain 80-byte copies. Moving a boxed mon into the party
+// (withdraw, or a party↔box swap that lands a box mon in the party) rebuilds the
+// 20-byte party_data (level + stats derived from EXP/IVs/EVs/nature) via
+// gen3_stats; if that can't be built (egg / unknown species) the move is
+// rejected. Deposit (party→box) needs no rebuild since a box stores only pc_data.
+
+static pksavhelper_error bills_pc_move_gen3(PokemonSave *s, struct bills_pc_slot src, struct bills_pc_slot dst)
+{
+    struct pksav_gba_pokemon_storage *st = &s->save.gba_save.pokemon_storage;
+    bool src_party = src.location == BILLS_PC_LOC_PARTY;
+    bool dst_party = dst.location == BILLS_PC_LOC_PARTY;
+
+    if (!bills_pc_slot_occupied(s, src.location, src.box_num, src.index))
+    {
+        return error_swap_pkmn;
+    }
+    bool dst_occupied = bills_pc_slot_occupied(s, dst.location, dst.box_num, dst.index);
+
+    // box <-> box (swap if dst occupied, move if dst empty)
+    if (!src_party && !dst_party)
+    {
+        struct pksav_gba_pc_pokemon *a = &st->p_pc->boxes[src.box_num].entries[src.index];
+        struct pksav_gba_pc_pokemon *b = &st->p_pc->boxes[dst.box_num].entries[dst.index];
+        if (a == b)
+        {
+            return error_none;
+        }
+        struct pksav_gba_pc_pokemon tmp = *a;
+        *a = *b; // if b is an empty (zeroed) slot this becomes a move
+        *b = tmp;
+        return error_none;
+    }
+
+    // party <-> party
+    if (src_party && dst_party)
+    {
+        if (src.index == dst.index || !dst_occupied)
+        {
+            return error_none; // party is contiguous; no empty slots to move into
+        }
+        struct pksav_gba_party_pokemon tmp = st->p_party->party[src.index];
+        st->p_party->party[src.index] = st->p_party->party[dst.index];
+        st->p_party->party[dst.index] = tmp;
+        return error_none;
+    }
+
+    // party -> box
+    if (src_party && !dst_party)
+    {
+        struct pksav_gba_pc_pokemon *box_entry = &st->p_pc->boxes[dst.box_num].entries[dst.index];
+        if (!dst_occupied)
+        {
+            // Deposit into an empty box slot (a box stores only the pc_data).
+            int count = (int)st->p_party->count;
+            if (count <= 1)
+            {
+                return error_swap_pkmn; // can't empty the party
+            }
+            *box_entry = st->p_party->party[src.index].pc_data;
+            for (int i = src.index; i < count - 1; i++)
+            {
+                st->p_party->party[i] = st->p_party->party[i + 1];
+            }
+            memset(&st->p_party->party[count - 1], 0, sizeof(struct pksav_gba_party_pokemon));
+            st->p_party->count = (uint32_t)(count - 1);
+            return error_none;
+        }
+        // Swap: the box mon enters the party slot, so it needs rebuilt party_data.
+        struct pksav_gba_pc_pokemon box_mon = *box_entry;
+        struct pksav_gba_pokemon_party_data pd;
+        if (!gen3_build_party_data(&box_mon, &pd))
+        {
+            return error_swap_pkmn;
+        }
+        struct pksav_gba_party_pokemon party_mon = st->p_party->party[src.index];
+        st->p_party->party[src.index].pc_data = box_mon;
+        st->p_party->party[src.index].party_data = pd;
+        *box_entry = party_mon.pc_data;
+        return error_none;
+    }
+
+    // box -> party (withdraw to an empty slot, or swap with an occupied one).
+    {
+        struct pksav_gba_pc_pokemon *box_entry = &st->p_pc->boxes[src.box_num].entries[src.index];
+        struct pksav_gba_pc_pokemon box_mon = *box_entry;
+        struct pksav_gba_pokemon_party_data pd;
+        if (!gen3_build_party_data(&box_mon, &pd))
+        {
+            return error_swap_pkmn; // egg / unknown species: can't build legal stats
+        }
+        if (!dst_occupied)
+        {
+            int count = (int)st->p_party->count;
+            if (count >= PKSAV_GBA_PARTY_NUM_POKEMON)
+            {
+                return error_swap_pkmn; // party full
+            }
+            st->p_party->party[count].pc_data = box_mon;
+            st->p_party->party[count].party_data = pd;
+            st->p_party->count = (uint32_t)(count + 1);
+            memset(box_entry, 0, sizeof(struct pksav_gba_pc_pokemon)); // clear box slot
+            return error_none;
+        }
+        struct pksav_gba_party_pokemon party_mon = st->p_party->party[dst.index];
+        st->p_party->party[dst.index].pc_data = box_mon;
+        st->p_party->party[dst.index].party_data = pd;
+        *box_entry = party_mon.pc_data;
+        return error_none;
+    }
+}
+
+pksavhelper_error bills_pc_move_pkmn(PokemonSave *pkmn_save, struct bills_pc_slot src, struct bills_pc_slot dst)
+{
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        return bills_pc_move_gen1(pkmn_save, src, dst);
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
+    {
+        return bills_pc_move_gen2(pkmn_save, src, dst);
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        return bills_pc_move_gen3(pkmn_save, src, dst);
+    }
+    return error_swap_pkmn;
+}
+
+// -------------------- Sorting --------------------
+
+static bool bills_pc_view_less(enum bills_pc_sort_mode mode, const struct bills_pc_entry_view *a, const struct bills_pc_entry_view *b)
+{
+    switch (mode)
+    {
+    case BILLS_PC_SORT_DEX:
+    {
+        int da = a->dex ? a->dex : 999; // unknown/invalid sorts last
+        int db = b->dex ? b->dex : 999;
+        if (da != db)
+        {
+            return da < db;
+        }
+        return bills_pc_ci_strcmp(a->nickname, b->nickname) < 0;
+    }
+    case BILLS_PC_SORT_NAME:
+        return bills_pc_ci_strcmp(a->nickname, b->nickname) < 0;
+    case BILLS_PC_SORT_LEVEL:
+        if (a->level != b->level)
+        {
+            return a->level > b->level; // strongest first
+        }
+        return bills_pc_ci_strcmp(a->nickname, b->nickname) < 0;
+    case BILLS_PC_SORT_TYPE:
+    {
+        int ta = (a->type1 == BILLS_PC_TYPE_UNKNOWN) ? 999 : a->type1;
+        int tb = (b->type1 == BILLS_PC_TYPE_UNKNOWN) ? 999 : b->type1;
+        if (ta != tb)
+        {
+            return ta < tb;
+        }
+        return bills_pc_ci_strcmp(a->nickname, b->nickname) < 0;
+    }
+    default:
+        return false;
+    }
+}
+
+void bills_pc_sort_box(PokemonSave *pkmn_save, int box_num, enum bills_pc_sort_mode mode)
+{
+    if (mode == BILLS_PC_SORT_NONE || mode >= BILLS_PC_SORT_COUNT)
+    {
+        return;
+    }
+    int n = bills_pc_container_count(pkmn_save, BILLS_PC_LOC_BOX, box_num);
+    if (n <= 1)
+    {
+        return;
+    }
+
+    // Gen 3: boxes are slot-based (gaps allowed). Gather occupied slots, sort,
+    // and repack contiguously from the top of the box.
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        struct pksav_gba_pokemon_box *box = &pkmn_save->save.gba_save.pokemon_storage.p_pc->boxes[box_num];
+        struct pksav_gba_pc_pokemon occupied[PKSAV_GBA_BOX_NUM_POKEMON];
+        struct bills_pc_entry_view gviews[PKSAV_GBA_BOX_NUM_POKEMON];
+        int gorder[PKSAV_GBA_BOX_NUM_POKEMON];
+        int m = 0;
+        for (int i = 0; i < PKSAV_GBA_BOX_NUM_POKEMON; i++)
+        {
+            if (box->entries[i].blocks.growth.species != 0)
+            {
+                occupied[m] = box->entries[i];
+                bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, box_num, i, &gviews[m]);
+                gorder[m] = m;
+                m++;
+            }
+        }
+        for (int i = 1; i < m; i++)
+        {
+            int cur = gorder[i];
+            int j = i - 1;
+            while (j >= 0 && bills_pc_view_less(mode, &gviews[cur], &gviews[gorder[j]]))
+            {
+                gorder[j + 1] = gorder[j];
+                j--;
+            }
+            gorder[j + 1] = cur;
+        }
+        for (int k = 0; k < m; k++)
+        {
+            box->entries[k] = occupied[gorder[k]];
+        }
+        for (int k = m; k < PKSAV_GBA_BOX_NUM_POKEMON; k++)
+        {
+            memset(&box->entries[k], 0, sizeof(struct pksav_gba_pc_pokemon));
+        }
+        return;
+    }
+
+    struct bills_pc_entry_view views[PKSAV_GEN2_BOX_NUM_POKEMON];
+    int order[PKSAV_GEN2_BOX_NUM_POKEMON];
+    for (int i = 0; i < n; i++)
+    {
+        order[i] = i;
+        bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, box_num, i, &views[i]);
+    }
+    // Stable insertion sort over the permutation (box holds at most 20).
+    for (int i = 1; i < n; i++)
+    {
+        int cur = order[i];
+        int j = i - 1;
+        while (j >= 0 && bills_pc_view_less(mode, &views[cur], &views[order[j]]))
+        {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = cur;
+    }
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        struct pksav_gen1_pokemon_box *box = pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[box_num];
+        struct pksav_gen1_pokemon_box original = *box;
+        for (int k = 0; k < n; k++)
+        {
+            int src = order[k];
+            box->species[k] = original.species[src];
+            box->entries[k] = original.entries[src];
+            memcpy(box->otnames[k], original.otnames[src], sizeof(box->otnames[k]));
+            memcpy(box->nicknames[k], original.nicknames[src], sizeof(box->nicknames[k]));
+        }
+        box->species[n] = 0xFF;
+    }
+    else
+    {
+        struct pksav_gen2_pokemon_box *box = pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[box_num];
+        struct pksav_gen2_pokemon_box original = *box;
+        for (int k = 0; k < n; k++)
+        {
+            int src = order[k];
+            box->species[k] = original.species[src];
+            box->entries[k] = original.entries[src];
+            memcpy(box->otnames[k], original.otnames[src], sizeof(box->otnames[k]));
+            memcpy(box->nicknames[k], original.nicknames[src], sizeof(box->nicknames[k]));
+        }
+        box->species[n] = 0xFF;
+    }
+}
+
+// Largest total boxed capacity across all supported gens (Gen 3: 14 boxes x 30).
+#define BILLS_PC_MAX_BOXED (PKSAV_GBA_NUM_POKEMON_BOXES * PKSAV_GBA_BOX_NUM_POKEMON)
+
+// Sort a permutation `order` (size total) by the given mode over `views`.
+static void bills_pc_sort_order(int *order, const struct bills_pc_entry_view *views, int total, enum bills_pc_sort_mode mode)
+{
+    for (int i = 0; i < total; i++)
+    {
+        order[i] = i;
+    }
+    for (int i = 1; i < total; i++)
+    {
+        int cur = order[i];
+        int j = i - 1;
+        while (j >= 0 && bills_pc_view_less(mode, &views[cur], &views[order[j]]))
+        {
+            order[j + 1] = order[j];
+            j--;
+        }
+        order[j + 1] = cur;
+    }
+}
+
+void bills_pc_sort_all_boxes(PokemonSave *pkmn_save, enum bills_pc_sort_mode mode)
+{
+    if (mode == BILLS_PC_SORT_NONE || mode >= BILLS_PC_SORT_COUNT)
+    {
+        return;
+    }
+    int nboxes = bills_pc_num_boxes(pkmn_save);
+    int cap = bills_pc_box_capacity(pkmn_save);
+
+    struct bills_pc_entry_view views[BILLS_PC_MAX_BOXED];
+    int order[BILLS_PC_MAX_BOXED];
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        struct pksav_gba_pc_pokemon entries[BILLS_PC_MAX_BOXED];
+        int total = 0;
+        for (int b = 0; b < nboxes; b++)
+        {
+            struct pksav_gba_pokemon_box *box = &pkmn_save->save.gba_save.pokemon_storage.p_pc->boxes[b];
+            for (int s = 0; s < PKSAV_GBA_BOX_NUM_POKEMON; s++)
+            {
+                if (box->entries[s].blocks.growth.species != 0)
+                {
+                    entries[total] = box->entries[s];
+                    bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, b, s, &views[total]);
+                    total++;
+                }
+            }
+        }
+        if (total <= 1)
+        {
+            return;
+        }
+        bills_pc_sort_order(order, views, total, mode);
+
+        int idx = 0;
+        for (int b = 0; b < nboxes; b++)
+        {
+            struct pksav_gba_pokemon_box *box = &pkmn_save->save.gba_save.pokemon_storage.p_pc->boxes[b];
+            for (int s = 0; s < PKSAV_GBA_BOX_NUM_POKEMON; s++)
+            {
+                if (idx < total)
+                {
+                    box->entries[s] = entries[order[idx++]];
+                }
+                else
+                {
+                    memset(&box->entries[s], 0, sizeof(struct pksav_gba_pc_pokemon));
+                }
+            }
+        }
+        return;
+    }
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        struct pksav_gen1_pc_pokemon entries[BILLS_PC_MAX_BOXED];
+        uint8_t species[BILLS_PC_MAX_BOXED];
+        uint8_t otnames[BILLS_PC_MAX_BOXED][PKSAV_GEN1_POKEMON_OTNAME_STORAGE_LENGTH + 1];
+        uint8_t nicknames[BILLS_PC_MAX_BOXED][PKSAV_GEN1_POKEMON_NICKNAME_LENGTH + 1];
+
+        int total = 0;
+        for (int b = 0; b < nboxes; b++)
+        {
+            struct pksav_gen1_pokemon_box *box = pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[b];
+            int c = bills_pc_container_count(pkmn_save, BILLS_PC_LOC_BOX, b);
+            for (int s = 0; s < c; s++)
+            {
+                entries[total] = box->entries[s];
+                species[total] = box->species[s];
+                memcpy(otnames[total], box->otnames[s], sizeof(otnames[total]));
+                memcpy(nicknames[total], box->nicknames[s], sizeof(nicknames[total]));
+                bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, b, s, &views[total]);
+                total++;
+            }
+        }
+        if (total <= 1)
+        {
+            return;
+        }
+        bills_pc_sort_order(order, views, total, mode);
+
+        int idx = 0;
+        for (int b = 0; b < nboxes; b++)
+        {
+            struct pksav_gen1_pokemon_box *box = pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[b];
+            int put = total - idx;
+            if (put > cap) put = cap;
+            if (put < 0) put = 0;
+            for (int s = 0; s < put; s++)
+            {
+                int k = order[idx++];
+                box->species[s] = species[k];
+                box->entries[s] = entries[k];
+                memcpy(box->otnames[s], otnames[k], sizeof(box->otnames[s]));
+                memcpy(box->nicknames[s], nicknames[k], sizeof(box->nicknames[s]));
+            }
+            box->count = (uint8_t)put;
+            box->species[put] = 0xFF;
+        }
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
+    {
+        struct pksav_gen2_pc_pokemon entries[BILLS_PC_MAX_BOXED];
+        uint8_t species[BILLS_PC_MAX_BOXED];
+        uint8_t otnames[BILLS_PC_MAX_BOXED][PKSAV_GEN2_POKEMON_OTNAME_STORAGE_LENGTH + 1];
+        uint8_t nicknames[BILLS_PC_MAX_BOXED][PKSAV_GEN2_POKEMON_NICKNAME_LENGTH + 1];
+
+        int total = 0;
+        for (int b = 0; b < nboxes; b++)
+        {
+            struct pksav_gen2_pokemon_box *box = pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[b];
+            int c = bills_pc_container_count(pkmn_save, BILLS_PC_LOC_BOX, b);
+            for (int s = 0; s < c; s++)
+            {
+                entries[total] = box->entries[s];
+                species[total] = box->species[s];
+                memcpy(otnames[total], box->otnames[s], sizeof(otnames[total]));
+                memcpy(nicknames[total], box->nicknames[s], sizeof(nicknames[total]));
+                bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, b, s, &views[total]);
+                total++;
+            }
+        }
+        if (total <= 1)
+        {
+            return;
+        }
+        bills_pc_sort_order(order, views, total, mode);
+
+        int idx = 0;
+        for (int b = 0; b < nboxes; b++)
+        {
+            struct pksav_gen2_pokemon_box *box = pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[b];
+            int put = total - idx;
+            if (put > cap) put = cap;
+            if (put < 0) put = 0;
+            for (int s = 0; s < put; s++)
+            {
+                int k = order[idx++];
+                box->species[s] = species[k];
+                box->entries[s] = entries[k];
+                memcpy(box->otnames[s], otnames[k], sizeof(box->otnames[s]));
+                memcpy(box->nicknames[s], nicknames[k], sizeof(box->nicknames[s]));
+            }
+            box->count = (uint8_t)put;
+            box->species[put] = 0xFF;
+        }
+    }
+}
+
+// -------------------- Current-box mirror sync --------------------
+
+void bills_pc_normalize_current_box(PokemonSave *pkmn_save)
+{
+    int cur = bills_pc_current_box_num(pkmn_save);
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        *pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[cur] =
+            *pkmn_save->save.gen1_save.pokemon_storage.p_current_box;
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
+    {
+        *pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[cur] =
+            *pkmn_save->save.gen2_save.pokemon_storage.p_current_box;
+    }
+}
+
+void bills_pc_flush_current_box(PokemonSave *pkmn_save)
+{
+    int cur = bills_pc_current_box_num(pkmn_save);
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
+    {
+        *pkmn_save->save.gen1_save.pokemon_storage.p_current_box =
+            *pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[cur];
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
+    {
+        *pkmn_save->save.gen2_save.pokemon_storage.p_current_box =
+            *pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[cur];
     }
 }

@@ -119,7 +119,7 @@ void draw_change_dir(struct save_file_data *save_file_data, GameScreen *current_
         }
     }
 
-    BeginDrawing();
+    begin_virtual_frame();
     ClearBackground(BACKGROUND_COLOR);
     DrawCircle(SCREEN_WIDTH * -0.7, SCREEN_HEIGHT * -1, 1380, BLACK);
     DrawCircle(SCREEN_WIDTH * -0.7, SCREEN_HEIGHT * -1, 1350, COLOR_PKMN_RED);
@@ -176,7 +176,7 @@ void draw_change_dir(struct save_file_data *save_file_data, GameScreen *current_
         draw_confirmation_modal(reset_modal_text, details_text, "Reset", on_reset_modal_submit, on_reset_modal_cancel, E_MODAL_INFO);
     }
 
-    EndDrawing();
+    end_virtual_frame();
 
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && !show_reset_modal)
     {
