@@ -7,25 +7,92 @@
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 
-// Fixed-resolution render target. All screens draw into this at SCREEN_WIDTH x
-// SCREEN_HEIGHT, and it is scaled up (letterboxed) to the actual window size.
+// Render target the current frame draws into (SCREEN_WIDTH x g_virtual_height),
+// then scaled to the actual window in end_virtual_frame().
 static RenderTexture2D g_render_target;
+static int g_target_height = SCREEN_HEIGHT_BASE;
 
-// Uniform scale that fits the virtual resolution inside the current window.
-static float virtual_scale(void)
+// Current virtual canvas height. Fixed screens use SCREEN_HEIGHT_BASE; list
+// screens grow it so a taller window shows more rows. Reported via SCREEN_HEIGHT.
+static int g_virtual_height = SCREEN_HEIGHT_BASE;
+// Whether the current screen wants a height that grows with the window.
+static bool g_dynamic_viewport = false;
+
+int virtual_screen_height(void)
 {
-    float sx = (float)GetScreenWidth() / SCREEN_WIDTH;
-    float sy = (float)GetScreenHeight() / SCREEN_HEIGHT;
-    return sx < sy ? sx : sy;
+    return g_virtual_height;
+}
+
+// Set by the main loop before dispatching a screen.
+void set_dynamic_viewport(bool dynamic)
+{
+    g_dynamic_viewport = dynamic;
+}
+
+// Compute the draw scale + top-left offset for the current window/mode, and
+// update g_virtual_height. Returns the scale.
+static float compute_viewport(float *out_offset_x, float *out_offset_y)
+{
+    float win_w = (float)GetScreenWidth();
+    float win_h = (float)GetScreenHeight();
+    float scale;
+    float offset_x;
+    float offset_y;
+
+    if (g_dynamic_viewport)
+    {
+        // Fit width; the extra vertical space becomes more canvas (more rows).
+        float scale_w = win_w / SCREEN_WIDTH;
+        int vh = (int)(win_h / scale_w + 0.5f);
+        if (vh >= SCREEN_HEIGHT_BASE)
+        {
+            // Tall/normal window: fill it, no letterboxing.
+            if (vh > 4000) vh = 4000;
+            g_virtual_height = vh;
+            scale = scale_w;
+            offset_x = 0.0f;
+            offset_y = 0.0f;
+        }
+        else
+        {
+            // Wide, short window: fit height instead, letterbox the sides.
+            g_virtual_height = SCREEN_HEIGHT_BASE;
+            scale = win_h / SCREEN_HEIGHT_BASE;
+            offset_x = (win_w - SCREEN_WIDTH * scale) * 0.5f;
+            offset_y = 0.0f;
+        }
+    }
+    else
+    {
+        // Fixed 800x480 canvas, uniformly scaled and letterboxed.
+        g_virtual_height = SCREEN_HEIGHT_BASE;
+        float sx = win_w / SCREEN_WIDTH;
+        float sy = win_h / SCREEN_HEIGHT_BASE;
+        scale = sx < sy ? sx : sy;
+        offset_x = (win_w - SCREEN_WIDTH * scale) * 0.5f;
+        offset_y = (win_h - SCREEN_HEIGHT_BASE * scale) * 0.5f;
+    }
+
+    if (out_offset_x) *out_offset_x = offset_x;
+    if (out_offset_y) *out_offset_y = offset_y;
+    return scale;
 }
 
 void begin_virtual_frame(void)
 {
-    // Map real mouse coordinates back into virtual (800x480) space so every
-    // screen's hit-testing keeps working unchanged at any window size.
-    float scale = virtual_scale();
-    float offset_x = (GetScreenWidth() - SCREEN_WIDTH * scale) * 0.5f;
-    float offset_y = (GetScreenHeight() - SCREEN_HEIGHT * scale) * 0.5f;
+    float offset_x, offset_y;
+    float scale = compute_viewport(&offset_x, &offset_y);
+
+    // Grow/shrink the render target if the virtual height changed.
+    if (g_virtual_height != g_target_height)
+    {
+        UnloadRenderTexture(g_render_target);
+        g_render_target = LoadRenderTexture(SCREEN_WIDTH, g_virtual_height);
+        SetTextureFilter(g_render_target.texture, TEXTURE_FILTER_BILINEAR);
+        g_target_height = g_virtual_height;
+    }
+
+    // Map real mouse coords back into virtual space so hit-testing is unchanged.
     SetMouseOffset((int)(-offset_x), (int)(-offset_y));
     SetMouseScale(1.0f / scale, 1.0f / scale);
 
@@ -36,15 +103,14 @@ void end_virtual_frame(void)
 {
     EndTextureMode();
 
-    float scale = virtual_scale();
-    float offset_x = (GetScreenWidth() - SCREEN_WIDTH * scale) * 0.5f;
-    float offset_y = (GetScreenHeight() - SCREEN_HEIGHT * scale) * 0.5f;
+    float offset_x, offset_y;
+    float scale = compute_viewport(&offset_x, &offset_y);
 
     BeginDrawing();
     ClearBackground(BLACK);
     // Source is flipped vertically because render textures are bottom-up.
-    Rectangle src = {0.0f, 0.0f, (float)SCREEN_WIDTH, -(float)SCREEN_HEIGHT};
-    Rectangle dst = {offset_x, offset_y, SCREEN_WIDTH * scale, SCREEN_HEIGHT * scale};
+    Rectangle src = {0.0f, 0.0f, (float)SCREEN_WIDTH, -(float)g_virtual_height};
+    Rectangle dst = {offset_x, offset_y, SCREEN_WIDTH * scale, g_virtual_height * scale};
     DrawTexturePro(g_render_target.texture, src, dst, (Vector2){0.0f, 0.0f}, 0.0f, WHITE);
     EndDrawing();
 }
@@ -90,42 +156,62 @@ void create_trainer_id_str(const struct trainer_info *trainer, char *trainer_id)
 void handle_list_scroll(int *y_offset, const int num_saves, const int corrupted_count, int *mouses_down_index, bool *is_moving_scroll, int *banner_position_offset)
 {
     const uint8_t box_height = 93;
-    const uint8_t num_visible = 4;
+    // Rows that fit the current (possibly taller) canvas, so the scroll range
+    // stays correct when a taller window shows more of the list at once.
+    int num_visible = (SCREEN_HEIGHT - 100) / box_height;
+    if (num_visible < 1)
+    {
+        num_visible = 1;
+    }
     const int height = num_saves * box_height - 60 * corrupted_count;
 
-    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) || IsKeyDown(KEY_UP) || IsKeyDown(KEY_DOWN))
+    const int min_offset = -height + (num_visible * box_height) + (corrupted_count * 25);
+    const int max_offset = 75;
+
+    // Mouse wheel — the primary way to scroll.
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f)
+    {
+        *y_offset += (int)(wheel * 40);
+        *mouses_down_index = -1;
+        *is_moving_scroll = true;
+    }
+    // Arrow keys (held) scroll at a usable speed.
+    if (IsKeyDown(KEY_UP))
+    {
+        *y_offset += 8;
+        *mouses_down_index = -1;
+        *is_moving_scroll = true;
+    }
+    if (IsKeyDown(KEY_DOWN))
+    {
+        *y_offset -= 8;
+        *mouses_down_index = -1;
+        *is_moving_scroll = true;
+    }
+    // Click-and-drag still works.
+    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON))
     {
         float mouse_delta = GetMouseDelta().y;
-
-        if (mouse_delta >= 0.5 || mouse_delta <= -0.5)
+        if (mouse_delta >= 0.5f || mouse_delta <= -0.5f)
         {
-            *y_offset += GetMouseDelta().y;
-            *y_offset = *y_offset < -height + (num_visible * box_height) + (corrupted_count * 25) ? -height + (num_visible * box_height) + (corrupted_count * 25) : *y_offset;
-            *y_offset = *y_offset > 75 ? 75 : *y_offset;
-            *mouses_down_index = -1;
-            *is_moving_scroll = true;
-            if (*y_offset < 50)
-            {
-                *banner_position_offset = *y_offset - 50;
-            }
-            else
-            {
-                *banner_position_offset = 0;
-            }
-        }
-        else if (IsKeyDown(KEY_UP))
-        {
-            *y_offset += 1;
-            *mouses_down_index = -1;
-            *is_moving_scroll = true;
-        }
-        else if (IsKeyDown(KEY_DOWN))
-        {
-            *y_offset -= 1;
+            *y_offset += (int)mouse_delta;
             *mouses_down_index = -1;
             *is_moving_scroll = true;
         }
     }
+
+    // Clamp the scroll offset (min first so a short list snaps to the top).
+    if (*y_offset < min_offset)
+    {
+        *y_offset = min_offset;
+    }
+    if (*y_offset > max_offset)
+    {
+        *y_offset = max_offset;
+    }
+    // The top banner follows the list as it scrolls past the top.
+    *banner_position_offset = *y_offset < 50 ? *y_offset - 50 : 0;
 
     const int min_y = (height + (num_visible * box_height) + (corrupted_count * 25)) - 75;
     const int max_y = min_y + 75 - (-height + (num_visible * box_height) + (corrupted_count * 25));
@@ -314,6 +400,12 @@ void draw_raylib_screen_loop(
 
     while (!should_close_window && !WindowShouldClose())
     {
+        // The save-file lists grow their canvas with the window (taller window =
+        // more rows); every other screen uses the fixed 800x480 layout.
+        set_dynamic_viewport(current_screen == SCREEN_FILE_SELECT ||
+                             current_screen == SCREEN_BILLS_PC_FILE_SELECT ||
+                             current_screen == SCREEN_EVOLVE_FILE_SELECT);
+
         switch (current_screen)
         {
         case SCREEN_FILE_SELECT:
