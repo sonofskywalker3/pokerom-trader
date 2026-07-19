@@ -196,13 +196,14 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
                 is_duplicate_save_file = trainer1->trainer_id == trainer2->trainer_id;
 
                 *is_same_generation = pkmn_save_player1->save_generation_type == pkmn_save_player2->save_generation_type;
-                // Gen 3 can only trade with Gen 3 (no legal cross-gen path).
+                // A Gen 1/2 + Gen 3 pairing is a one-way forward transfer (no legal
+                // cross-gen *trade* exists); everything else is a trade.
                 bool p1_gen3 = pkmn_save_player1->save_generation_type == SAVE_GENERATION_3;
                 bool p2_gen3 = pkmn_save_player2->save_generation_type == SAVE_GENERATION_3;
-                bool incompatible_generations = p1_gen3 != p2_gen3;
-                if (!is_duplicate_save_file && !incompatible_generations)
+                bool forward_transfer = p1_gen3 != p2_gen3;
+                if (forward_transfer || !is_duplicate_save_file)
                 {
-                    *current_screen = SCREEN_TRADE;
+                    *current_screen = forward_transfer ? SCREEN_TRANSFER : SCREEN_TRADE;
                     selected_saves_index[0] = -1;
                     selected_saves_index[1] = -1;
                     ui_selection = E_UI_NONE;
@@ -211,10 +212,6 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
                     reset_toast_message();
                     show_duplicate_toast = false;
                     show_incompatible_toast = false;
-                }
-                else if (incompatible_generations)
-                {
-                    show_incompatible_toast = true;
                 }
                 else
                 {
