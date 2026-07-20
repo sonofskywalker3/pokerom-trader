@@ -1,6 +1,8 @@
+#include <stdio.h>
 #include "raylibhelper.h"
 #include "pksavhelper.h"
 #include "gen4_pkmn.h"
+#include "gen4_stats.h" /* gen4_species_name for non-nicknamed mons */
 
 void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle container_rec, bool is_selected)
 {
@@ -116,7 +118,17 @@ void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle
             uint8_t dec[GEN4_PK4_PARTY_SIZE];
             gen4_pk4_decrypt(gen4_party_slot_raw(g4, i), dec, true);
             char pokemon_name[PKMN_NAME_TEXT_MAX + 1] = "\0";
-            gen4_decode_text(dec + 0x48, PKMN_NAME_TEXT_MAX, pokemon_name);
+            // Non-nicknamed mons show the species name (the game hides the raw
+            // name field behind the IsNicknamed flag).
+            if (gen4_pk4_is_nicknamed(dec))
+            {
+                gen4_decode_text(dec + 0x48, PKMN_NAME_TEXT_MAX, pokemon_name);
+            }
+            else
+            {
+                snprintf(pokemon_name, sizeof(pokemon_name), "%s",
+                         gen4_species_name(gen4_pk4_species(dec)));
+            }
             shadow_text(pokemon_name, name_slots[i].x, name_slots[i].y, 20, WHITE);
             shadow_text(TextFormat(" L%d", gen4_pk4_party_level(dec)), (name_slots[i].x + ((container_rec.width - 135) / 3)) - 60, name_slots[i].y, 20, WHITE);
         }
