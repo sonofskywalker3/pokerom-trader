@@ -27,6 +27,16 @@
 
 #define PKSAV_GBA_SAVE_SIZE (0x10000)
 
+/*
+ * Byte offset of the event-flag bit array within SaveBlock1, per game.
+ * A flag id is a bit index into this array: byte = base + id/8, bit = id%8.
+ * Sourced from the pret decompilation (SaveBlock1 `flags[]` offset):
+ *   pokeruby / pokeemerald / pokefirered. Diff-confirmed against saves.
+ */
+#define PKSAV_GBA_RS_EVENT_FLAGS_OFFSET      (0x1220)
+#define PKSAV_GBA_EMERALD_EVENT_FLAGS_OFFSET (0x1270)
+#define PKSAV_GBA_FRLG_EVENT_FLAGS_OFFSET    (0x0EE0)
+
 #define PKSAV_GBA_RIVAL_NAME_LENGTH PKSAV_GBA_TRAINER_NAME_LENGTH
 
 #define PKSAV_GBA_SAVE_MONEY_MAX_VALUE        (999999)
@@ -159,6 +169,32 @@ PKSAV_API enum pksav_error pksav_gba_save_save(
 
 PKSAV_API enum pksav_error pksav_gba_free_save(
     struct pksav_gba_save* p_gba_save
+);
+
+/*!
+ * @brief Read an in-game event flag from a loaded GBA save.
+ *
+ * `flag_id` is a bit index into the game's SaveBlock1 event-flag array (the
+ * same numbering as the pret decompilation's FLAG_* constants). Returns
+ * PKSAV_ERROR_INVALID_SAVE if the save type has no known flag layout or the
+ * flag lies outside SaveBlock1.
+ */
+PKSAV_API enum pksav_error pksav_gba_save_get_flag(
+    const struct pksav_gba_save* p_gba_save,
+    uint16_t flag_id,
+    bool* p_flag_out
+);
+
+/*!
+ * @brief Set or clear an in-game event flag on a loaded GBA save.
+ *
+ * The change lands in the decrypted save slot; ::pksav_gba_save_save reshuffles
+ * and recomputes section checksums on write. Idempotent.
+ */
+PKSAV_API enum pksav_error pksav_gba_save_set_flag(
+    struct pksav_gba_save* p_gba_save,
+    uint16_t flag_id,
+    bool value
 );
 
 #ifdef __cplusplus

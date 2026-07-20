@@ -708,6 +708,99 @@ enum pksav_error pksav_gba_save_save(
     return error;
 }
 
+// SaveBlock1 event-flag base offset (bytes) for a given game, or 0 if unknown.
+static size_t _pksav_gba_event_flags_base(enum pksav_gba_save_type save_type)
+{
+    switch(save_type)
+    {
+        case PKSAV_GBA_SAVE_TYPE_RS:      return PKSAV_GBA_RS_EVENT_FLAGS_OFFSET;
+        case PKSAV_GBA_SAVE_TYPE_EMERALD: return PKSAV_GBA_EMERALD_EVENT_FLAGS_OFFSET;
+        case PKSAV_GBA_SAVE_TYPE_FRLG:    return PKSAV_GBA_FRLG_EVENT_FLAGS_OFFSET;
+        default:                          return 0;
+    }
+}
+
+// Map a SaveBlock1 byte offset to its byte in the unshuffled slot. SaveBlock1 is
+// stored across sections 1-4, each holding PKSAV_GBA_SAVE_SECTION_SIZE_BYTES of
+// data. Returns NULL if the offset falls outside SaveBlock1 (sections 1-4).
+static uint8_t* _pksav_gba_saveblock1_byte(
+    struct pksav_gba_save_internal* p_internal,
+    size_t offset
+)
+{
+    size_t section = 1 + (offset / PKSAV_GBA_SAVE_SECTION_SIZE_BYTES);
+    size_t in_off  = offset % PKSAV_GBA_SAVE_SECTION_SIZE_BYTES;
+    if(section > 4)
+    {
+        return NULL;
+    }
+    return &p_internal->unshuffled_save_slot.sections_arr[section].data8[in_off];
+}
+
+enum pksav_error pksav_gba_save_get_flag(
+    const struct pksav_gba_save* p_gba_save,
+    uint16_t flag_id,
+    bool* p_flag_out
+)
+{
+    if(!p_gba_save || !p_flag_out)
+    {
+        return PKSAV_ERROR_NULL_POINTER;
+    }
+
+    size_t base = _pksav_gba_event_flags_base(p_gba_save->save_type);
+    if(base == 0)
+    {
+        return PKSAV_ERROR_INVALID_SAVE;
+    }
+
+    struct pksav_gba_save_internal* p_internal = p_gba_save->p_internal;
+    uint8_t* p_byte = _pksav_gba_saveblock1_byte(p_internal, base + (flag_id >> 3));
+    if(!p_byte)
+    {
+        return PKSAV_ERROR_INVALID_SAVE;
+    }
+
+    *p_flag_out = (bool)((*p_byte >> (flag_id & 7)) & 1u);
+    return PKSAV_ERROR_NONE;
+}
+
+enum pksav_error pksav_gba_save_set_flag(
+    struct pksav_gba_save* p_gba_save,
+    uint16_t flag_id,
+    bool value
+)
+{
+    if(!p_gba_save)
+    {
+        return PKSAV_ERROR_NULL_POINTER;
+    }
+
+    size_t base = _pksav_gba_event_flags_base(p_gba_save->save_type);
+    if(base == 0)
+    {
+        return PKSAV_ERROR_INVALID_SAVE;
+    }
+
+    struct pksav_gba_save_internal* p_internal = p_gba_save->p_internal;
+    uint8_t* p_byte = _pksav_gba_saveblock1_byte(p_internal, base + (flag_id >> 3));
+    if(!p_byte)
+    {
+        return PKSAV_ERROR_INVALID_SAVE;
+    }
+
+    uint8_t mask = (uint8_t)(1u << (flag_id & 7));
+    if(value)
+    {
+        *p_byte |= mask;
+    }
+    else
+    {
+        *p_byte = (uint8_t)(*p_byte & (uint8_t)~mask);
+    }
+    return PKSAV_ERROR_NONE;
+}
+
 enum pksav_error pksav_gba_free_save(
     struct pksav_gba_save* p_gba_save
 )
