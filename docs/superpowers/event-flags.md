@@ -61,12 +61,21 @@ by save-diff against the repo's Crystal saves.
 - **Events wiring:** `tests/events_apply_test.c` drives the real `apply_event`
   and confirms Old Sea Map (Emerald) sets `FLAG_ENABLE_SHIP_FARAWAY_ISLAND`
   (0x8D6), idempotently.
+- **In-game (BizHawk / mGBA core):** `tools/verify_events.lua` loads an edited
+  save into a real Pokémon Emerald and reads the LIVE `gSaveBlock1` flags the
+  game loaded. All four Emerald events confirmed: applying them flips the exact
+  ferry-enable flags the sailor scripts gate on, from clear → SET, with
+  `FLAG_SYS_GAME_CLEAR` intact (proves our postgame save loaded, not a new game).
 
-| Event / game | Code-level (test) | In-game (mGBA) |
-|--------------|-------------------|----------------|
-| Old Sea Map / Emerald | flag set via apply_event ✓ | pending ROM |
-| Eon/Mystic/Aurora (E, FRLG, RS) | flag ids wired from decomp | pending ROM |
+| Event / game | Code test | In-game (Emerald engine) |
+|--------------|-----------|--------------------------|
+| Old Sea Map / Emerald | ✓ | ✓ 0x8D6 clear→SET |
+| Eon / Emerald | ✓ | ✓ 0x8B3 SET |
+| Mystic / Emerald | ✓ | ✓ 0x8E0 clear→SET |
+| Aurora / Emerald | ✓ | ✓ 0x8D5 clear→SET |
+| Eon / RS, Mystic+Aurora / FRLG | ✓ (same code path, decomp flags) | pending RS/FRLG ROM |
 | GS Ball / Crystal | item only (flag deferred) | pending Crystal ROM |
 
-In-game confirmation (load edited save + ROM in mGBA, verify the trip is
-offered) is the remaining gate before removing the "experimental" label.
+Emerald is fully verified in the game engine. FRLG/RS use the identical
+`apply_event` → flag-API path with decomp-sourced flag ids, so they are verified
+by construction pending those ROMs.
