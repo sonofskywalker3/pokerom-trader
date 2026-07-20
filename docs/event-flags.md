@@ -56,7 +56,17 @@ by save-diff against the repo's Crystal saves.
 
 ## Verification status
 
-| Event / game | Byte-level (save-diff) | In-game (mGBA) |
-|--------------|------------------------|----------------|
-| Old Sea Map / Emerald | flag round-trips (API test) | pending ROM |
-| all others | pending wiring | pending ROM |
+- **Flag API (Gen 2 + Gen 3):** round-trips through save + reload in
+  `tests/pksav_flag_test.c`.
+- **Events wiring:** `tests/events_apply_test.c` drives the real `apply_event`
+  and confirms Old Sea Map (Emerald) sets `FLAG_ENABLE_SHIP_FARAWAY_ISLAND`
+  (0x8D6), idempotently.
+
+| Event / game | Code-level (test) | In-game (mGBA) |
+|--------------|-------------------|----------------|
+| Old Sea Map / Emerald | flag set via apply_event ✓ | pending ROM |
+| Eon/Mystic/Aurora (E, FRLG, RS) | flag ids wired from decomp | pending ROM |
+| GS Ball / Crystal | item only (flag deferred) | pending Crystal ROM |
+
+In-game confirmation (load edited save + ROM in mGBA, verify the trip is
+offered) is the remaining gate before removing the "experimental" label.
