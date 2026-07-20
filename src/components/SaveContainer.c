@@ -1,5 +1,6 @@
 #include "raylibhelper.h"
 #include "pksavhelper.h"
+#include "gen4_pkmn.h"
 
 void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle container_rec, bool is_selected)
 {
@@ -35,6 +36,12 @@ void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle
         hours = pksav_littleendian16(save_time->hours);
         minutes = save_time->minutes;
         seconds = save_time->seconds;
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        gen4_trainer_name(&pkmn_save->save.gen4_save, trainer_name);
+        trainer_id = gen4_trainer_id(&pkmn_save->save.gen4_save);
+        // playtime not surfaced yet; shown as 0h00m00s
     }
     else
     {
@@ -98,6 +105,20 @@ void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle
             pksav_gba_import_text(pkmn_save->save.gba_save.pokemon_storage.p_party->party[i].pc_data.nickname, pokemon_name, PKMN_NAME_TEXT_MAX);
             shadow_text(pokemon_name, name_slots[i].x, name_slots[i].y, 20, WHITE);
             shadow_text(TextFormat(" L%d", pkmn_save->save.gba_save.pokemon_storage.p_party->party[i].party_data.level), (name_slots[i].x + ((container_rec.width - 135) / 3)) - 60, name_slots[i].y, 20, WHITE);
+        }
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        const struct gen4_save *g4 = &pkmn_save->save.gen4_save;
+        int count = gen4_party_count(g4);
+        for (int i = 0; i < count && i < 6; i++)
+        {
+            uint8_t dec[GEN4_PK4_PARTY_SIZE];
+            gen4_pk4_decrypt(gen4_party_slot_raw(g4, i), dec, true);
+            char pokemon_name[PKMN_NAME_TEXT_MAX + 1] = "\0";
+            gen4_decode_text(dec + 0x48, PKMN_NAME_TEXT_MAX, pokemon_name);
+            shadow_text(pokemon_name, name_slots[i].x, name_slots[i].y, 20, WHITE);
+            shadow_text(TextFormat(" L%d", gen4_pk4_party_level(dec)), (name_slots[i].x + ((container_rec.width - 135) / 3)) - 60, name_slots[i].y, 20, WHITE);
         }
     }
     else

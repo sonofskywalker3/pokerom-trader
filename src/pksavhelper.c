@@ -7,6 +7,7 @@
 #include "filehelper.h"
 #include "gen3_species.h"
 #include "gen3_stats.h"
+#include "gen4_pkmn.h" /* Gen 4 PK4 decode for the Boxes view */
 
 int error_handler(enum pksav_error error, const char *message)
 {
@@ -176,6 +177,17 @@ void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer)
         trainer->trainer_id = pksav_littleendian16(pkmn_save->save.gba_save.player_info.p_id->pid);
         trainer->pokemon_party.gba_pokemon_party = *pkmn_save->save.gba_save.pokemon_storage.p_party;
         trainer->trainer_generation = SAVE_GENERATION_3;
+        break;
+    }
+    case SAVE_GENERATION_4:
+    {
+        // Gen 4 party isn't in the union PokemonPartyData; the Boxes screen reads
+        // party/box mons via bills_pc_get_view, so only name+id are needed here.
+        char trainer_name[TRAINER_NAME_TEXT_MAX + 1] = "\0";
+        gen4_trainer_name(&pkmn_save->save.gen4_save, trainer_name);
+        strcpy(trainer->trainer_name, trainer_name);
+        trainer->trainer_id = gen4_trainer_id(&pkmn_save->save.gen4_save);
+        trainer->trainer_generation = SAVE_GENERATION_4;
         break;
     }
     default:
@@ -1139,6 +1151,8 @@ int bills_pc_num_boxes(const PokemonSave *pkmn_save)
         return PKSAV_GEN1_NUM_POKEMON_BOXES;
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
         return PKSAV_GBA_NUM_POKEMON_BOXES;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+        return GEN4_NUM_BOXES;
     return PKSAV_GEN2_NUM_POKEMON_BOXES;
 }
 
@@ -1148,6 +1162,8 @@ int bills_pc_box_capacity(const PokemonSave *pkmn_save)
         return PKSAV_GEN1_BOX_NUM_POKEMON;
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
         return PKSAV_GBA_BOX_NUM_POKEMON;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+        return GEN4_BOX_SLOTS;
     return PKSAV_GEN2_BOX_NUM_POKEMON;
 }
 
@@ -1169,6 +1185,10 @@ int bills_pc_current_box_num(const PokemonSave *pkmn_save)
     {
         cur = (int)pkmn_save->save.gba_save.pokemon_storage.p_pc->current_box;
     }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        cur = gen4_current_box(&pkmn_save->save.gen4_save);
+    }
     else
     {
         cur = *pkmn_save->save.gen2_save.pokemon_storage.p_current_box_num & 0x0F;
@@ -1187,11 +1207,33 @@ static bool gba_box_slot_occupied(const PokemonSave *pkmn_save, int box_num, int
     return pkmn_save->save.gba_save.pokemon_storage.p_pc->boxes[box_num].entries[index].blocks.growth.species != 0;
 }
 
+// A Gen 4 box slot is occupied when its decrypted species is non-zero (boxes
+// allow gaps, like Gen 3). Party slots are contiguous up to the count.
+static bool gen4_slot_occupied(const struct gen4_save *g4, enum bills_pc_location location, int box_num, int index)
+{
+    if (location == BILLS_PC_LOC_PARTY)
+    {
+        return index < (int)gen4_party_count(g4);
+    }
+    const uint8_t *raw = gen4_box_slot_raw(g4, box_num, index);
+    if (!raw)
+    {
+        return false;
+    }
+    uint8_t dec[GEN4_PK4_STORED_SIZE];
+    gen4_pk4_decrypt(raw, dec, false);
+    return gen4_pk4_species(dec) != 0;
+}
+
 bool bills_pc_slot_occupied(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index)
 {
     if (index < 0)
     {
         return false;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        return gen4_slot_occupied(&pkmn_save->save.gen4_save, location, box_num, index);
     }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
@@ -1209,6 +1251,14 @@ int bills_pc_container_count(const PokemonSave *pkmn_save, enum bills_pc_locatio
 {
     int count;
     int capacity;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        if (location == BILLS_PC_LOC_PARTY)
+        {
+            return (int)gen4_party_count(&pkmn_save->save.gen4_save);
+        }
+        return gen4_box_occupied_count(&pkmn_save->save.gen4_save, box_num);
+    }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
         if (location == BILLS_PC_LOC_PARTY)
@@ -1281,6 +1331,22 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
         return;
     }
     out_view->occupied = true;
+
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        const struct gen4_save *g4 = &pkmn_save->save.gen4_save;
+        bool is_party = (location == BILLS_PC_LOC_PARTY);
+        const uint8_t *raw = is_party ? gen4_party_slot_raw(g4, index)
+                                      : gen4_box_slot_raw(g4, box_num, index);
+        uint8_t dec[GEN4_PK4_PARTY_SIZE];
+        gen4_pk4_decrypt(raw, dec, is_party);
+        out_view->species = gen4_pk4_species(dec); // Gen 4 species == National Dex
+        out_view->dex = out_view->species;
+        // Party record caches the level; boxed mons store none (derive from EXP).
+        out_view->level = is_party ? gen4_pk4_party_level(dec) : 0;
+        gen4_decode_text(dec + 0x48, PKMN_NAME_TEXT_MAX, out_view->nickname);
+        return;
+    }
 
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
@@ -1951,6 +2017,10 @@ void bills_pc_sort_box(PokemonSave *pkmn_save, int box_num, enum bills_pc_sort_m
     {
         return;
     }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        return; // Gen 4 box sorting is deferred (read-only view for now).
+    }
     int n = bills_pc_container_count(pkmn_save, BILLS_PC_LOC_BOX, box_num);
     if (n <= 1)
     {
@@ -2076,6 +2146,10 @@ void bills_pc_sort_all_boxes(PokemonSave *pkmn_save, enum bills_pc_sort_mode mod
     if (mode == BILLS_PC_SORT_NONE || mode >= BILLS_PC_SORT_COUNT)
     {
         return;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        return; // Gen 4 sorting deferred; also avoids the Gen3-sized scratch buffers.
     }
     int nboxes = bills_pc_num_boxes(pkmn_save);
     int cap = bills_pc_box_capacity(pkmn_save);
