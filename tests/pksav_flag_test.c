@@ -57,9 +57,44 @@ static int test_gba_flag_roundtrip(void)
     return 0;
 }
 
+#define CRYSTAL_BASELINE "saves/refs/baseline/pokemon_crystal.sav"
+#define CRYSTAL_TMP      "tests/_tmp_crystal.sav"
+#define GEN2_TEST_FLAG   0x10 /* arbitrary in-range event flag (mechanism test) */
+
+static int test_gen2_flag_roundtrip(void)
+{
+    struct pksav_gen2_save save;
+    CHECK(pksav_gen2_load_save_from_file(CRYSTAL_BASELINE, &save) == PKSAV_ERROR_NONE,
+          "load crystal baseline");
+    CHECK(save.save_type == PKSAV_GEN2_SAVE_TYPE_CRYSTAL, "baseline is Crystal");
+
+    CHECK(pksav_gen2_save_set_event_flag(&save, GEN2_TEST_FLAG, true) == PKSAV_ERROR_NONE,
+          "set gen2 flag");
+    bool flag = false;
+    CHECK(pksav_gen2_save_get_event_flag(&save, GEN2_TEST_FLAG, &flag) == PKSAV_ERROR_NONE,
+          "get gen2 flag");
+    CHECK(flag == true, "gen2 flag reads back set in memory");
+
+    CHECK(pksav_gen2_save_save(CRYSTAL_TMP, &save) == PKSAV_ERROR_NONE, "save crystal tmp");
+    pksav_gen2_free_save(&save);
+
+    struct pksav_gen2_save reloaded;
+    CHECK(pksav_gen2_load_save_from_file(CRYSTAL_TMP, &reloaded) == PKSAV_ERROR_NONE,
+          "reload crystal tmp");
+    flag = false;
+    CHECK(pksav_gen2_save_get_event_flag(&reloaded, GEN2_TEST_FLAG, &flag) == PKSAV_ERROR_NONE,
+          "get gen2 flag (reloaded)");
+    CHECK(flag == true, "gen2 flag persisted across save+reload");
+    pksav_gen2_free_save(&reloaded);
+
+    printf("test_gen2_flag_roundtrip PASS\n");
+    return 0;
+}
+
 int main(void)
 {
     if(test_gba_flag_roundtrip()) return 1;
+    if(test_gen2_flag_roundtrip()) return 1;
     printf("ALL PASS\n");
     return 0;
 }
