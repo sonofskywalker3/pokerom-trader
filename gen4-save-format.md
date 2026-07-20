@@ -111,3 +111,41 @@ contiguous: digits '0'..'9' @0x0121, 'A'..'Z' @0x012B, 'a'..'z' @0x0145; space
 = 0x01DE. Punctuation is scattered (0x01A8..0x01D2). Verified: real-save OT and
 nicknames ("Peter", "Anthony", "Statistics", "Cave Flash") decode cleanly.
 Implemented in `gen4_pkmn.c` gen4_char().
+
+## 12. Gen 3 -> Gen 4 transfer (Pal Park)
+
+Pal Park migrates a Gen 3 mon into Gen 4. Forward-only (Transporter semantics —
+no return trip). Sourced from Bulbapedia "Pal Park" + Project Pokémon PK4 notes;
+not yet validated against a real migrated mon (no such fixture on hand).
+
+PK3 -> PK4 field mapping:
+
+| PK4 field | Source | Notes |
+|-----------|--------|-------|
+| PID @0x00 | PK3 personality, verbatim | preserves nature (PID%25), gender, ability slot, shininess |
+| Species @0x08 | `gen3_internal_to_national(pk3 species)` | National Dex |
+| Held item @0x0A | Gen 3 item id -> Gen 4 item id | **item indices differ between gens — needs a map (or drop)** |
+| TID/SID @0x0C/@0x0E | copied | |
+| EXP @0x10 | copied | growth curves identical; level unchanged |
+| Friendship @0x14 | **reset to 70** | Pal Park always resets |
+| Ability @0x15 | species' ability for the PID-derived slot | **needs a species->ability(×2) table to get the ability *id*** |
+| Language @0x17 | copied / English(2) | |
+| EVs @0x18 (6) | copied | |
+| Moves/PP/PP-ups @0x28/0x30/0x34 | copied | move indices stable gen3->4 |
+| IV32 @0x38 bits0-29 | copied from PK3 5-bit IVs (same HP/Atk/Def/Spe/SpA/SpD layout) | egg bit30=0; IsNicknamed bit31 below |
+| IsNicknamed (IV32 bit31) | 1 if nickname != species name (Gen 4 lang), else 0 | Pal Park re-derives this |
+| Nickname @0x48 / OT name @0x68 | re-encode PK3 text -> PK4 codes | **needs a gen4 text ENCODER (reverse of gen4_char)** |
+| Origin/version @0x5F | Gen 3 game -> version id | Sapphire=1, Ruby=2, Emerald=3, FireRed=4, LeafGreen=5 |
+| Met location | **55 (Pal Park)** | DP: @0x80; Pt/HGSS: extended @0x46 (set the DP @0x80 slot too). Egg loc=0 |
+| Met level (bits0-6 @0x84) | current level | OT gender bit7 preserved |
+| Ball | Gen 3 ball, preserved | @0x83 (DP/Pt) / @0x86 (HGSS) |
+| Fateful encounter | 0 | Gen 3 has no fateful flag |
+| Pokérus / ribbons / contest | 0 (or copy contest stats) | not legality-critical |
+
+Into party -> rebuild the 100-byte stats via `gen4_build_party_stats`; then the
+standard PK4 encode (checksum @0x06, block shuffle, LCRNG encrypt). Legality
+gate: only Gen 3-obtainable species (Pal Park will not migrate eggs).
+
+Still to determine before/at implementation: (a) the species->ability table
+(493×2) or a simplification; (b) the Gen 3->4 held-item id map (or drop items);
+(c) a gen4 text encoder.
