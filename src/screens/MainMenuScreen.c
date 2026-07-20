@@ -1,5 +1,36 @@
 #include "raylibhelper.h"
 #include "filehelper.h"
+#include "event_sprites.h"
+#include "event_header.h"
+
+// Event-Pokémon sprites + "Events" title for the details pane, loaded once.
+static Texture2D g_event_tex[EVENT_SPRITE_COUNT];
+static Texture2D g_event_header;
+static bool g_event_tex_loaded = false;
+
+static void ensure_event_textures(void)
+{
+    if (g_event_tex_loaded)
+        return;
+    for (int i = 0; i < EVENT_SPRITE_COUNT; i++)
+    {
+        Image img = {0};
+        img.data = event_sprite_px[i];
+        img.width = event_sprite_w[i];
+        img.height = event_sprite_h[i];
+        img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+        img.mipmaps = 1;
+        g_event_tex[i] = LoadTextureFromImage(img);
+    }
+    Image hdr = {0};
+    hdr.data = event_header_px;
+    hdr.width = EVENT_HEADER_W;
+    hdr.height = EVENT_HEADER_H;
+    hdr.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+    hdr.mipmaps = 1;
+    g_event_header = LoadTextureFromImage(hdr);
+    g_event_tex_loaded = true;
+}
 
 enum main_menu_buttons
 {
@@ -284,7 +315,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Evolve button
-    if (draw_menu_button(text_position_start.x + 15, text_position_start.y + rec_height_offset, "Evolve", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + rec_height_offset, "Evolve", text_size))
     {
         set_active_animation(BUTTON_EVOLVE);
     }
@@ -318,7 +349,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Boxes button
-    if (draw_menu_button(text_position_start.x + 30, text_position_start.y + (rec_height_offset * 2), "Boxes", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 2), "Boxes", text_size))
     {
         set_active_animation(BUTTON_BILLS_PC);
     }
@@ -342,7 +373,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Events button
-    if (draw_menu_button(text_position_start.x + 45, text_position_start.y + (rec_height_offset * 3), "Events", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 3), "Events", text_size))
     {
         set_active_animation(BUTTON_EVENTS);
     }
@@ -351,16 +382,34 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     if (active_anim_index == BUTTON_EVENTS)
     {
         slide_animate_details_pane(BUTTON_EVENTS);
-        // Simple "ticket" icon
-        int tx = details_rec.x + anim_from_right[BUTTON_EVENTS] + 60;
-        int ty = details_rec.y + 90;
-        DrawRectangle(tx, ty, 130, 70, BLACK);
-        DrawRectangle(tx + 4, ty + 4, 122, 62, COLOR_PKMN_YELLOW);
-        DrawCircle(tx + 4, ty + 35, 8, BLACK);
-        DrawCircle(tx + 126, ty + 35, 8, BLACK);
-        DrawRectangle(tx + 16, ty + 16, 98, 8, BLACK);
-        DrawRectangle(tx + 16, ty + 34, 60, 6, (Color){120, 120, 120, 255});
-        DrawRectangle(tx + 16, ty + 46, 80, 6, (Color){120, 120, 120, 255});
+        ensure_event_textures();
+
+        // Stylized "Events" header, matching the Trade/Evolve/Boxes panes
+        // (~15% smaller to sit better in the pane).
+        DrawTextureEx(g_event_header,
+                      (Vector2){details_rec.x + anim_from_right[BUTTON_EVENTS], details_rec.y + 25},
+                      0, 0.85f, WHITE);
+
+        // Scatter the event Pokémon across the lower white pane, following its
+        // curved left edge so none are clipped by the black arc, and leaving
+        // room for the header above. Sprite centers in canvas coords; the
+        // pane's slide offset is added on top.
+        // Spread across the white area, clear of the header letters, the black
+        // arc, and the bottom text. Centers in canvas coords; order matches
+        // event_sprites.h: Celebi, Latias, Latios, Lugia, Ho-Oh, Deoxys.
+        static const int scatter[EVENT_SPRITE_COUNT][2] = {
+            {490, 362}, {618, 372}, {748, 322},
+            {538, 408}, {672, 410}, {776, 388},
+        };
+        const float sprite_scale = 0.85f;
+        for (int i = 0; i < EVENT_SPRITE_COUNT; i++)
+        {
+            Texture2D s = g_event_tex[i];
+            float x = scatter[i][0] + anim_from_right[BUTTON_EVENTS] - s.width * sprite_scale / 2.0f;
+            float y = scatter[i][1] - s.height * sprite_scale / 2.0f;
+            DrawTextureEx(s, (Vector2){x, y}, 0, sprite_scale, WHITE);
+        }
+
         DrawText("Re-issue event tickets", details_text.x + anim_from_right[BUTTON_EVENTS] + 55, details_text.y, 20, BLACK);
     }
     else
@@ -369,7 +418,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Settings button
-    if (draw_menu_button(text_position_start.x + 60, text_position_start.y + (rec_height_offset * 4), "Settings", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 4), "Settings", text_size))
     {
         set_active_animation(BUTTON_SETTINGS);
     }
@@ -391,7 +440,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Quit button
-    if (draw_menu_button(text_position_start.x + 75, text_position_start.y + (rec_height_offset * 5), "Quit", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 5), "Quit", text_size))
     {
         set_active_animation(BUTTON_QUIT);
     }

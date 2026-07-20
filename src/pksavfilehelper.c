@@ -14,6 +14,15 @@ enum pksav_error detect_savefile_generation(const char *path, SaveGenerationType
     enum pksav_gen2_save_type gen2_save_type = PKSAV_GEN2_SAVE_TYPE_NONE;
     enum pksav_gba_save_type gba_save_type = PKSAV_GBA_SAVE_TYPE_NONE;
 
+    // Check Gen 4 (DS) first: it has the strongest, most specific signature
+    // (exactly 512 KB + a 0x20060623 block-footer magic), so it can't collide
+    // with the smaller GB/GBA formats or the weak Gen 2 heuristic.
+    if (gen4_is_gen4_file(path))
+    {
+        *save_generation_type = SAVE_GENERATION_4;
+        return err;
+    }
+
     err = pksav_gen1_get_file_save_type(path, &gen1_save_type);
     if (gen1_save_type != PKSAV_GEN1_SAVE_TYPE_NONE)
     {
@@ -113,6 +122,17 @@ void load_savefile_from_path(const char *path, PokemonSave *pkmn_save)
         pkmn_save->save.gba_save = save;
         break;
     }
+    case SAVE_GENERATION_4:
+    {
+        struct gen4_save save;
+        err = gen4_load_save_from_file(path, &save);
+        if (err != PKSAV_ERROR_NONE)
+        {
+            error_handler(err, "Error loading save");
+        }
+        pkmn_save->save.gen4_save = save;
+        break;
+    }
     default:
         break;
     }
@@ -132,6 +152,10 @@ pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
     else if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
         err = pksav_gba_save_save(path, &pkmn_save->save.gba_save);
+    }
+    else if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        err = gen4_save_save(path, &pkmn_save->save.gen4_save);
     }
     else
     {
@@ -172,6 +196,8 @@ void load_display_files(const struct save_file_data *save_file_data, PokemonSave
                     save_file_size += sizeof(struct pksav_gen1_save);
                 else if (pkmn_saves[i].save_generation_type == SAVE_GENERATION_3)
                     save_file_size += sizeof(struct pksav_gba_save);
+                else if (pkmn_saves[i].save_generation_type == SAVE_GENERATION_4)
+                    save_file_size += sizeof(struct gen4_save);
                 else
                     save_file_size += sizeof(struct pksav_gen2_save);
             }
@@ -215,6 +241,12 @@ void free_pkmn_saves(PokemonSave *pkmn_saves, uint8_t *save_file_count)
         case SAVE_GENERATION_3:
         {
             pksav_gba_free_save(&pkmn_saves[i].save.gba_save);
+            count++;
+            break;
+        }
+        case SAVE_GENERATION_4:
+        {
+            gen4_free_save(&pkmn_saves[i].save.gen4_save);
             count++;
             break;
         }

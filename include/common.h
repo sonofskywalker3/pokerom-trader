@@ -2,6 +2,7 @@
 #define COMMON_H
 
 #include <pksav.h>
+#include "gen4_save.h" /* Gen 4 (DS) support — not in PKSav; our own parser. */
 
 #define SCREEN_WIDTH 800
 // Base (design) height. The actual virtual height can grow for list screens so
@@ -121,6 +122,7 @@ typedef enum
     SAVE_GENERATION_1,
     SAVE_GENERATION_2,
     SAVE_GENERATION_3,
+    SAVE_GENERATION_4,
     SAVE_GENERATION_CORRUPTED,
 } SaveGenerationType;
 
@@ -129,6 +131,7 @@ typedef union
     struct pksav_gen1_save gen1_save;
     struct pksav_gen2_save gen2_save;
     struct pksav_gba_save gba_save;
+    struct gen4_save gen4_save;
 } SaveGeneration;
 
 typedef struct
