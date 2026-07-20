@@ -18,6 +18,8 @@ obj/
 .DS_Store
 src/pokeromtrader
 
-tests/*
+tests/*.exe
+tests/*.sav
+tests/_tmp_*
 
 settings.json
