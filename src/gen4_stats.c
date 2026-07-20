@@ -10,6 +10,7 @@
  */
 #include "gen4_stats.h"
 #include "gen4_pkmn.h"
+#include "gen3_species.h" /* reuse the verified #1..386 National Dex names */
 #include <string.h>
 
 /* Local LE helpers (a decrypted PK4 stores its party stats little-endian). */
@@ -573,6 +574,46 @@ uint8_t gen4_growth_rate_for_dex(uint16_t national_dex)
         return 0;
     }
     return gen4_growth_rate[national_dex];
+}
+
+/* Sinnoh National Dex names (#387..493); index = dex - 387. Names #1..386 come
+ * from gen3_national_dex_name (identical between Gen 3 and Gen 4). */
+static const char *const SINNOH_NAMES[] = {
+    /* 387 */ "Turtwig", "Grotle", "Torterra", "Chimchar", "Monferno",
+    /* 392 */ "Infernape", "Piplup", "Prinplup", "Empoleon", "Starly",
+    /* 397 */ "Staravia", "Staraptor", "Bidoof", "Bibarel", "Kricketot",
+    /* 402 */ "Kricketune", "Shinx", "Luxio", "Luxray", "Budew",
+    /* 407 */ "Roserade", "Cranidos", "Rampardos", "Shieldon", "Bastiodon",
+    /* 412 */ "Burmy", "Wormadam", "Mothim", "Combee", "Vespiquen",
+    /* 417 */ "Pachirisu", "Buizel", "Floatzel", "Cherubi", "Cherrim",
+    /* 422 */ "Shellos", "Gastrodon", "Ambipom", "Drifloon", "Drifblim",
+    /* 427 */ "Buneary", "Lopunny", "Mismagius", "Honchkrow", "Glameow",
+    /* 432 */ "Purugly", "Chingling", "Stunky", "Skuntank", "Bronzor",
+    /* 437 */ "Bronzong", "Bonsly", "Mime Jr.", "Happiny", "Chatot",
+    /* 442 */ "Spiritomb", "Gible", "Gabite", "Garchomp", "Munchlax",
+    /* 447 */ "Riolu", "Lucario", "Hippopotas", "Hippowdon", "Skorupi",
+    /* 452 */ "Drapion", "Croagunk", "Toxicroak", "Carnivine", "Finneon",
+    /* 457 */ "Lumineon", "Mantyke", "Snover", "Abomasnow", "Weavile",
+    /* 462 */ "Magnezone", "Lickilicky", "Rhyperior", "Tangrowth", "Electivire",
+    /* 467 */ "Magmortar", "Togekiss", "Yanmega", "Leafeon", "Glaceon",
+    /* 472 */ "Gliscor", "Mamoswine", "Porygon-Z", "Gallade", "Probopass",
+    /* 477 */ "Dusknoir", "Froslass", "Rotom", "Uxie", "Mesprit",
+    /* 482 */ "Azelf", "Dialga", "Palkia", "Heatran", "Regigigas",
+    /* 487 */ "Giratina", "Cresselia", "Phione", "Manaphy", "Darkrai",
+    /* 492 */ "Shaymin", "Arceus",
+};
+
+const char *gen4_species_name(uint16_t national_dex)
+{
+    if (national_dex < 1 || national_dex > GEN4_NATIONAL_DEX_MAX)
+    {
+        return "?";
+    }
+    if (national_dex <= GEN3_NATIONAL_DEX_MAX) /* #1..386 */
+    {
+        return gen3_national_dex_name(national_dex);
+    }
+    return SINNOH_NAMES[national_dex - (GEN3_NATIONAL_DEX_MAX + 1)];
 }
 
 uint32_t gen4_exp_for_level(int n, uint8_t growth_rate)

@@ -1346,7 +1346,18 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
         out_view->dex = out_view->species;
         // Party record caches the level; boxed mons store none (derive from EXP).
         out_view->level = is_party ? gen4_pk4_party_level(dec) : 0;
-        gen4_decode_text(dec + 0x48, PKMN_NAME_TEXT_MAX, out_view->nickname);
+        // Only nicknamed mons carry a meaningful name field; for the rest the game
+        // hides the raw bytes behind the IsNicknamed flag and shows the species
+        // name (so hacked mons with garbage name fields render correctly).
+        if (gen4_pk4_is_nicknamed(dec))
+        {
+            gen4_decode_text(dec + 0x48, PKMN_NAME_TEXT_MAX, out_view->nickname);
+        }
+        else
+        {
+            snprintf(out_view->nickname, sizeof(out_view->nickname), "%s",
+                     gen4_species_name(out_view->species));
+        }
         return;
     }
 

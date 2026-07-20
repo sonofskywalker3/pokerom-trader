@@ -22,6 +22,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* English National Dex species name for a Gen 4 dex number (#1..493). Returns
+ * "?" for 0 / out of range. Used to show the species name for a non-nicknamed
+ * mon (whose raw name field the game hides behind the IsNicknamed flag). */
+const char *gen4_species_name(uint16_t national_dex);
+
 /* Growth-rate group (0=Medium Fast, 1=Erratic, 2=Fluctuating, 3=Medium Slow,
  * 4=Fast, 5=Slow) for a National Dex number (#1..493), 0 if out of range. */
 uint8_t gen4_growth_rate_for_dex(uint16_t national_dex);
