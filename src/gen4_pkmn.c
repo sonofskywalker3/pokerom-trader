@@ -208,3 +208,64 @@ size_t gen4_decode_text(const uint8_t *field, int max_chars, char *out)
     out[n] = '\0';
     return n;
 }
+
+/* Inverse of gen4_char: ASCII -> Gen 4 16-bit code, or 0xFFFF if unmappable. */
+static uint16_t gen4_code(char c)
+{
+    if (c >= '0' && c <= '9')
+        return (uint16_t)(0x0121 + (c - '0'));
+    if (c >= 'A' && c <= 'Z')
+        return (uint16_t)(0x012B + (c - 'A'));
+    if (c >= 'a' && c <= 'z')
+        return (uint16_t)(0x0145 + (c - 'a'));
+    switch (c)
+    {
+    case ' ':  return 0x01DE;
+    case '&':  return 0x01C2;
+    case '$':  return 0x01A8;
+    case '!':  return 0x01AB;
+    case '?':  return 0x01AC;
+    case ',':  return 0x01AD;
+    case '.':  return 0x01AE;
+    case '/':  return 0x01B1;
+    case '\'': return 0x01B3;
+    case '(':  return 0x01B9;
+    case ')':  return 0x01BA;
+    case '+':  return 0x01BD;
+    case '-':  return 0x01BE;
+    case '*':  return 0x01BF;
+    case '#':  return 0x01C0;
+    case '=':  return 0x01C1;
+    case '~':  return 0x01C3;
+    case ':':  return 0x01C4;
+    case ';':  return 0x01C5;
+    case '@':  return 0x01D0;
+    case '%':  return 0x01D2;
+    default:   return 0xFFFF;
+    }
+}
+
+void gen4_encode_text(const char *src, uint8_t *field, int field_slots)
+{
+    int w = 0;
+    /* Leave room for the 0xFFFF terminator (last slot). */
+    for (int i = 0; src && src[i] && w < field_slots - 1; i++)
+    {
+        uint16_t code = gen4_code(src[i]);
+        if (code == 0xFFFF)
+            continue; /* skip characters with no Gen 4 mapping */
+        wr16(field + 2 * w, code);
+        w++;
+    }
+    /* One 0xFFFF terminator, then 0x0000 padding — matches the real games'
+     * name-field layout (verified against retail saves). */
+    if (w < field_slots)
+    {
+        wr16(field + 2 * w, 0xFFFF);
+        w++;
+    }
+    for (int i = w; i < field_slots; i++)
+    {
+        wr16(field + 2 * i, 0x0000);
+    }
+}

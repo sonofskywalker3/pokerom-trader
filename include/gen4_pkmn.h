@@ -60,4 +60,11 @@ uint8_t  gen4_pk4_party_level(const uint8_t *dec);     /* party form: cached lev
  * must hold at least max_chars+1 bytes. Returns the string length. */
 size_t gen4_decode_text(const uint8_t *field, int max_chars, char *out);
 
+/* Encode an ASCII string into a Gen 4 name field (inverse of gen4_decode_text).
+ * Writes up to `field_slots` u16 codes: the mapped characters (truncated to
+ * fit a terminator), a 0xFFFF terminator, then 0xFFFF padding to fill the field.
+ * `field_slots` is the u16 capacity (11 for nickname @0x48, 8 for OT @0x68).
+ * Unmappable input characters are skipped. */
+void gen4_encode_text(const char *src, uint8_t *field, int field_slots);
+
 #endif /* GEN4_PKMN_H */

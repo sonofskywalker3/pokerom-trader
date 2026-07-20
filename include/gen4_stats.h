@@ -27,6 +27,12 @@
  * mon (whose raw name field the game hides behind the IsNicknamed flag). */
 const char *gen4_species_name(uint16_t national_dex);
 
+/* Gen 4 ability ID for (species #1..493, slot). slot 0 = first ability, slot 1
+ * = second (== first for single-ability species). Returns 0 if out of range.
+ * Gen-4-accurate: post-Gen-4 ability changes (e.g. Gengar's Cursed Body, the
+ * Neutralizing Gas line) are corrected back to their Gen-4 values. */
+uint8_t gen4_ability_id(uint16_t national_dex, int slot);
+
 /* Growth-rate group (0=Medium Fast, 1=Erratic, 2=Fluctuating, 3=Medium Slow,
  * 4=Fast, 5=Slow) for a National Dex number (#1..493), 0 if out of range. */
 uint8_t gen4_growth_rate_for_dex(uint16_t national_dex);
