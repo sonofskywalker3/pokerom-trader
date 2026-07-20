@@ -8,6 +8,8 @@
 #include "gen3_species.h"
 #include "gen3_stats.h"
 #include "gen4_pkmn.h" /* Gen 4 PK4 decode for the Boxes view */
+#include "gen4_save.h" /* Gen 4 raw slot accessors for moves */
+#include "gen4_stats.h" /* Gen 4 party-stat rebuild on withdraw */
 
 int error_handler(enum pksav_error error, const char *message)
 {
@@ -1955,6 +1957,157 @@ static pksavhelper_error bills_pc_move_gen3(PokemonSave *s, struct bills_pc_slot
     }
 }
 
+/* Convert a raw 136-byte stored (box) PK4 into a raw 236-byte party PK4 with a
+ * freshly-derived stats region. Returns false if the mon has no legal stats
+ * (empty/egg/unknown species) — the caller must refuse the move. */
+static bool gen4_stored_to_party_raw(const uint8_t *box_raw, uint8_t *party_raw_out)
+{
+    uint8_t dec[GEN4_PK4_PARTY_SIZE];
+    memset(dec, 0, sizeof(dec));
+    gen4_pk4_decrypt(box_raw, dec, false); // decrypt the 136-byte stored form
+    if (!gen4_build_party_stats(dec))
+    {
+        return false;
+    }
+    gen4_pk4_encrypt(dec, party_raw_out, true); // re-encrypt as 236-byte party form
+    return true;
+}
+
+static pksavhelper_error bills_pc_move_gen4(PokemonSave *s, struct bills_pc_slot src, struct bills_pc_slot dst)
+{
+    struct gen4_save *g4 = &s->save.gen4_save;
+    bool src_party = src.location == BILLS_PC_LOC_PARTY;
+    bool dst_party = dst.location == BILLS_PC_LOC_PARTY;
+
+    if (!bills_pc_slot_occupied(s, src.location, src.box_num, src.index))
+    {
+        return error_swap_pkmn;
+    }
+    bool dst_occupied = bills_pc_slot_occupied(s, dst.location, dst.box_num, dst.index);
+
+    // box <-> box: raw 136-byte relocation (swap; an empty slot is all-zero).
+    if (!src_party && !dst_party)
+    {
+        uint8_t *a = gen4_box_slot_raw_mut(g4, src.box_num, src.index);
+        uint8_t *b = gen4_box_slot_raw_mut(g4, dst.box_num, dst.index);
+        if (!a || !b)
+        {
+            return error_swap_pkmn;
+        }
+        if (a == b)
+        {
+            return error_none;
+        }
+        uint8_t tmp[GEN4_PK4_STORED_SIZE];
+        memcpy(tmp, a, GEN4_PK4_STORED_SIZE);
+        memcpy(a, b, GEN4_PK4_STORED_SIZE);
+        memcpy(b, tmp, GEN4_PK4_STORED_SIZE);
+        return error_none;
+    }
+
+    // party <-> party: raw 236-byte swap. The party is contiguous, so there is
+    // no empty slot to "move" into.
+    if (src_party && dst_party)
+    {
+        if (src.index == dst.index || !dst_occupied)
+        {
+            return error_none;
+        }
+        uint8_t *a = gen4_party_slot_raw_mut(g4, src.index);
+        uint8_t *b = gen4_party_slot_raw_mut(g4, dst.index);
+        if (!a || !b)
+        {
+            return error_swap_pkmn;
+        }
+        uint8_t tmp[GEN4_PK4_PARTY_SIZE];
+        memcpy(tmp, a, GEN4_PK4_PARTY_SIZE);
+        memcpy(a, b, GEN4_PK4_PARTY_SIZE);
+        memcpy(b, tmp, GEN4_PK4_PARTY_SIZE);
+        return error_none;
+    }
+
+    // party -> box: the box stores only the 136-byte form (first 136 bytes of
+    // the encrypted party form are exactly a valid stored form).
+    if (src_party && !dst_party)
+    {
+        uint8_t *party_slot = gen4_party_slot_raw_mut(g4, src.index);
+        uint8_t *box_slot = gen4_box_slot_raw_mut(g4, dst.box_num, dst.index);
+        if (!party_slot || !box_slot)
+        {
+            return error_swap_pkmn;
+        }
+        int count = (int)gen4_party_count(g4);
+        if (!dst_occupied)
+        {
+            // Deposit into an empty box slot and compact the party.
+            if (count <= 1)
+            {
+                return error_swap_pkmn; // can't empty the party
+            }
+            memcpy(box_slot, party_slot, GEN4_PK4_STORED_SIZE);
+            for (int i = src.index; i < count - 1; i++)
+            {
+                uint8_t *cur = gen4_party_slot_raw_mut(g4, i);
+                uint8_t *nxt = gen4_party_slot_raw_mut(g4, i + 1);
+                memcpy(cur, nxt, GEN4_PK4_PARTY_SIZE);
+            }
+            memset(gen4_party_slot_raw_mut(g4, count - 1), 0, GEN4_PK4_PARTY_SIZE);
+            gen4_set_party_count(g4, (uint8_t)(count - 1));
+            return error_none;
+        }
+        // Swap: the box mon enters the party slot (needs rebuilt stats), and the
+        // party mon drops to its 136-byte stored form in the box.
+        uint8_t box_mon[GEN4_PK4_STORED_SIZE];
+        memcpy(box_mon, box_slot, GEN4_PK4_STORED_SIZE);
+        uint8_t new_party[GEN4_PK4_PARTY_SIZE];
+        if (!gen4_stored_to_party_raw(box_mon, new_party))
+        {
+            return error_swap_pkmn; // egg / unknown species: no legal stats
+        }
+        memcpy(box_slot, party_slot, GEN4_PK4_STORED_SIZE); // party -> box (drop stats)
+        memcpy(party_slot, new_party, GEN4_PK4_PARTY_SIZE); // box -> party (rebuilt)
+        return error_none;
+    }
+
+    // box -> party: withdraw. Needs the stats region rebuilt.
+    {
+        uint8_t *box_slot = gen4_box_slot_raw_mut(g4, src.box_num, src.index);
+        if (!box_slot)
+        {
+            return error_swap_pkmn;
+        }
+        uint8_t box_mon[GEN4_PK4_STORED_SIZE];
+        memcpy(box_mon, box_slot, GEN4_PK4_STORED_SIZE);
+        uint8_t new_party[GEN4_PK4_PARTY_SIZE];
+        if (!gen4_stored_to_party_raw(box_mon, new_party))
+        {
+            return error_swap_pkmn; // egg / unknown species: no legal stats
+        }
+        int count = (int)gen4_party_count(g4);
+        if (!dst_occupied)
+        {
+            // Withdraw into an empty (appended) party slot, clearing the box slot.
+            if (count >= GEN4_PARTY_MAX)
+            {
+                return error_swap_pkmn; // party full
+            }
+            memcpy(gen4_party_slot_raw_mut(g4, count), new_party, GEN4_PK4_PARTY_SIZE);
+            gen4_set_party_count(g4, (uint8_t)(count + 1));
+            memset(box_slot, 0, GEN4_PK4_STORED_SIZE);
+            return error_none;
+        }
+        // Swap with an occupied party slot: party mon drops to the box.
+        uint8_t *party_slot = gen4_party_slot_raw_mut(g4, dst.index);
+        if (!party_slot)
+        {
+            return error_swap_pkmn;
+        }
+        memcpy(box_slot, party_slot, GEN4_PK4_STORED_SIZE); // party -> box (drop stats)
+        memcpy(party_slot, new_party, GEN4_PK4_PARTY_SIZE); // box -> party (rebuilt)
+        return error_none;
+    }
+}
+
 pksavhelper_error bills_pc_move_pkmn(PokemonSave *pkmn_save, struct bills_pc_slot src, struct bills_pc_slot dst)
 {
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
@@ -1968,6 +2121,10 @@ pksavhelper_error bills_pc_move_pkmn(PokemonSave *pkmn_save, struct bills_pc_slo
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
         return bills_pc_move_gen3(pkmn_save, src, dst);
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        return bills_pc_move_gen4(pkmn_save, src, dst);
     }
     return error_swap_pkmn;
 }
@@ -2019,7 +2176,48 @@ void bills_pc_sort_box(PokemonSave *pkmn_save, int box_num, enum bills_pc_sort_m
     }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
     {
-        return; // Gen 4 box sorting is deferred (read-only view for now).
+        // Gen 4: gather occupied 136-byte stored mons, sort a permutation of
+        // their views, and repack contiguously from the top of the box.
+        struct gen4_save *g4 = &pkmn_save->save.gen4_save;
+        uint8_t occupied[GEN4_BOX_SLOTS][GEN4_PK4_STORED_SIZE];
+        struct bills_pc_entry_view gviews[GEN4_BOX_SLOTS];
+        int gorder[GEN4_BOX_SLOTS];
+        int m = 0;
+        for (int i = 0; i < GEN4_BOX_SLOTS; i++)
+        {
+            if (!bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_BOX, box_num, i))
+            {
+                continue;
+            }
+            memcpy(occupied[m], gen4_box_slot_raw_mut(g4, box_num, i), GEN4_PK4_STORED_SIZE);
+            bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, box_num, i, &gviews[m]);
+            gorder[m] = m;
+            m++;
+        }
+        if (m <= 1)
+        {
+            return;
+        }
+        for (int i = 1; i < m; i++)
+        {
+            int cur = gorder[i];
+            int j = i - 1;
+            while (j >= 0 && bills_pc_view_less(mode, &gviews[cur], &gviews[gorder[j]]))
+            {
+                gorder[j + 1] = gorder[j];
+                j--;
+            }
+            gorder[j + 1] = cur;
+        }
+        for (int k = 0; k < m; k++)
+        {
+            memcpy(gen4_box_slot_raw_mut(g4, box_num, k), occupied[gorder[k]], GEN4_PK4_STORED_SIZE);
+        }
+        for (int k = m; k < GEN4_BOX_SLOTS; k++)
+        {
+            memset(gen4_box_slot_raw_mut(g4, box_num, k), 0, GEN4_PK4_STORED_SIZE);
+        }
+        return;
     }
     int n = bills_pc_container_count(pkmn_save, BILLS_PC_LOC_BOX, box_num);
     if (n <= 1)
@@ -2149,7 +2347,50 @@ void bills_pc_sort_all_boxes(PokemonSave *pkmn_save, enum bills_pc_sort_mode mod
     }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
     {
-        return; // Gen 4 sorting deferred; also avoids the Gen3-sized scratch buffers.
+        // Gen 4 has 18x30 slots, exceeding the shared Gen3-sized scratch below,
+        // so it uses its own buffers. Gather all occupied stored mons across
+        // boxes, sort, and repack contiguously filling box 0, box 1, ...
+        struct gen4_save *g4 = &pkmn_save->save.gen4_save;
+        enum { G4_MAX_BOXED = GEN4_NUM_BOXES * GEN4_BOX_SLOTS };
+        static uint8_t g4_entries[G4_MAX_BOXED][GEN4_PK4_STORED_SIZE];
+        struct bills_pc_entry_view g4_views[G4_MAX_BOXED];
+        int g4_order[G4_MAX_BOXED];
+        int total = 0;
+        for (int b = 0; b < GEN4_NUM_BOXES; b++)
+        {
+            for (int s = 0; s < GEN4_BOX_SLOTS; s++)
+            {
+                if (!bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_BOX, b, s))
+                {
+                    continue;
+                }
+                memcpy(g4_entries[total], gen4_box_slot_raw_mut(g4, b, s), GEN4_PK4_STORED_SIZE);
+                bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, b, s, &g4_views[total]);
+                total++;
+            }
+        }
+        if (total <= 1)
+        {
+            return;
+        }
+        bills_pc_sort_order(g4_order, g4_views, total, mode);
+        int idx = 0;
+        for (int b = 0; b < GEN4_NUM_BOXES; b++)
+        {
+            for (int s = 0; s < GEN4_BOX_SLOTS; s++)
+            {
+                uint8_t *slot = gen4_box_slot_raw_mut(g4, b, s);
+                if (idx < total)
+                {
+                    memcpy(slot, g4_entries[g4_order[idx++]], GEN4_PK4_STORED_SIZE);
+                }
+                else
+                {
+                    memset(slot, 0, GEN4_PK4_STORED_SIZE);
+                }
+            }
+        }
+        return;
     }
     int nboxes = bills_pc_num_boxes(pkmn_save);
     int cap = bills_pc_box_capacity(pkmn_save);

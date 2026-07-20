@@ -217,6 +217,35 @@ const uint8_t *gen4_box_slot_raw(const struct gen4_save *save, int box, int slot
            (size_t)slot * GEN4_PK4_STORED_SIZE;
 }
 
+uint8_t *gen4_party_slot_raw_mut(struct gen4_save *save, int i)
+{
+    if (!save || !save->data || i < 0 || i >= GEN4_PARTY_MAX)
+        return NULL;
+    return save->data + save->general_base + save->layout.party_offset +
+           (size_t)GEN4_PK4_PARTY_SIZE * i;
+}
+
+uint8_t *gen4_box_slot_raw_mut(struct gen4_save *save, int box, int slot)
+{
+    if (!save || !save->data || box < 0 || box >= GEN4_NUM_BOXES ||
+        slot < 0 || slot >= GEN4_BOX_SLOTS)
+    {
+        return NULL;
+    }
+    return save->data + save->storage_base + save->layout.box_data_start +
+           (size_t)box * save->layout.box_stride +
+           (size_t)slot * GEN4_PK4_STORED_SIZE;
+}
+
+void gen4_set_party_count(struct gen4_save *save, uint8_t count)
+{
+    if (!save || !save->data)
+        return;
+    if (count > GEN4_PARTY_MAX)
+        count = GEN4_PARTY_MAX;
+    save->data[save->general_base + save->layout.party_count_offset] = count;
+}
+
 int gen4_box_occupied_count(const struct gen4_save *save, int box)
 {
     int count = 0;

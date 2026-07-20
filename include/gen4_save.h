@@ -79,6 +79,19 @@ const uint8_t *gen4_box_slot_raw(const struct gen4_save *save, int box, int slot
 /* Number of occupied slots in a box (species != 0 after decrypt). */
 int gen4_box_occupied_count(const struct gen4_save *save, int box);
 
+/* --- Mutable raw accessors (for edits/moves). These write into the active
+ * block; the caller must gen4_save_save() afterward to recompute CRCs. --- */
+
+/* Writable pointer to raw party slot i (i in 0..GEN4_PARTY_MAX-1), independent
+ * of the current count (so a caller can append at index==count). NULL if oob. */
+uint8_t *gen4_party_slot_raw_mut(struct gen4_save *save, int i);
+
+/* Writable pointer to the raw 136-byte stored mon at (box, slot). NULL if oob. */
+uint8_t *gen4_box_slot_raw_mut(struct gen4_save *save, int box, int slot);
+
+/* Set the party count (0..GEN4_PARTY_MAX). */
+void gen4_set_party_count(struct gen4_save *save, uint8_t count);
+
 /* The game's currently-selected box index (0..17). */
 int gen4_current_box(const struct gen4_save *save);
 
