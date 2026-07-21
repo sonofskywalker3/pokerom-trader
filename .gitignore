@@ -22,4 +22,8 @@ tests/*.exe
 tests/*.sav
 tests/_tmp_*
 
+// personal game saves (keep test fixtures in saves/refs/ tracked)
+saves/*.sav
+saves/gen4/
+
 settings.json
