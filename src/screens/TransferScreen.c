@@ -4,15 +4,27 @@
 #include "pksavhelper.h"
 #include "pksavfilehelper.h"
 #include "gen_transfer.h"
+#include "gen4_transfer.h"
 
-// One-way forward transfer: move a Gen 1/2 party Pokémon up into a Gen 3 save.
+// Can this source mon be sent up to the destination generation?
+static bool transfer_species_allowed(uint16_t dex, SaveGenerationType dest_gen)
+{
+    if (dest_gen == SAVE_GENERATION_4)
+    {
+        return dex >= 1 && dex <= 386; // any Gen 3 species Pal Parks (eggs refused later)
+    }
+    return gen3_species_obtainable(dex); // Gen 1/2 -> Gen 3
+}
+
+// One-way forward transfer: move a party Pokémon up a generation. Destination is
+// the higher-generation save (Gen 1/2 -> Gen 3, or Gen 3 -> Gen 4 via Pal Park).
 void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *player1_save_path, char *player2_save_path, struct trainer_info *trainer1, struct trainer_info *trainer2, GameScreen *current_screen)
 {
-    // One save is Gen 3 (destination), the other is Gen 1/2 (source).
+    // The higher generation is the destination; the lower is the source.
     PokemonSave *dest, *source;
     char *dest_path, *source_path;
     struct trainer_info *dest_tr, *source_tr;
-    if (save_player1->save_generation_type == SAVE_GENERATION_3)
+    if (save_player1->save_generation_type > save_player2->save_generation_type)
     {
         dest = save_player1; dest_path = player1_save_path; dest_tr = trainer1;
         source = save_player2; source_path = player2_save_path; source_tr = trainer2;
@@ -22,6 +34,8 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
         dest = save_player2; dest_path = player2_save_path; dest_tr = trainer2;
         source = save_player1; source_path = player1_save_path; source_tr = trainer1;
     }
+    SaveGenerationType dest_gen = dest->save_generation_type;
+    bool to_gen4 = (dest_gen == SAVE_GENERATION_4);
 
     static int selected = -1;
     static bool show_saving_icon = false;
@@ -51,7 +65,7 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
     {
         struct bills_pc_entry_view v;
         bills_pc_get_view(source, BILLS_PC_LOC_PARTY, 0, i, &v);
-        bool ok = gen3_species_obtainable(v.dex);
+        bool ok = transfer_species_allowed(v.dex, dest_gen);
         Rectangle row = (Rectangle){list_rec.x, list_rec.y + i * 30, list_rec.width, 28};
         bool hovered = CheckCollisionPointRec(GetMousePosition(), row);
         if (selected == i)
@@ -94,14 +108,21 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
     {
         struct bills_pc_entry_view v;
         bills_pc_get_view(source, BILLS_PC_LOC_PARTY, 0, selected, &v);
-        bool ok = gen3_species_obtainable(v.dex);
+        bool ok = transfer_species_allowed(v.dex, dest_gen);
         shadow_text(v.nickname, (int)info_rec.x + 10, (int)info_rec.y + 74, 22, WHITE);
         shadow_text(TextFormat("National Dex #%u", v.dex), (int)info_rec.x + 10, (int)info_rec.y + 104, 16, WHITE);
         if (ok)
         {
-            shadow_text("Obtainable in Gen 3 - OK to", (int)info_rec.x + 10, (int)info_rec.y + 140, 16, (Color){200, 255, 200, 255});
-            shadow_text("transfer (rebuilds stats, keeps OT).", (int)info_rec.x + 10, (int)info_rec.y + 162, 16, (Color){200, 255, 200, 255});
+            shadow_text(to_gen4 ? "Pal Park to Gen 4 - keeps IVs," : "Obtainable in Gen 3 - OK to",
+                        (int)info_rec.x + 10, (int)info_rec.y + 140, 16, (Color){200, 255, 200, 255});
+            shadow_text(to_gen4 ? "moves, OT; met at Pal Park." : "transfer (rebuilds stats, keeps OT).",
+                        (int)info_rec.x + 10, (int)info_rec.y + 162, 16, (Color){200, 255, 200, 255});
             can_transfer = true;
+        }
+        else if (to_gen4)
+        {
+            shadow_text("Not a Gen 3 species", (int)info_rec.x + 10, (int)info_rec.y + 140, 16, (Color){255, 180, 180, 255});
+            shadow_text("(cannot Pal Park). Blocked.", (int)info_rec.x + 10, (int)info_rec.y + 162, 16, (Color){255, 180, 180, 255});
         }
         else
         {
@@ -139,7 +160,9 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
         {
             create_backup_save(source, source_path);
             create_backup_save(dest, dest_path);
-            pksavhelper_error e = transfer_pkmn_to_gen3(source, (uint8_t)selected, dest);
+            pksavhelper_error e = to_gen4
+                                      ? transfer_pkmn_gen3_to_gen4(source, (uint8_t)selected, dest)
+                                      : transfer_pkmn_to_gen3(source, (uint8_t)selected, dest);
             if (e == error_none)
             {
                 save_savefile_to_path(source, source_path);
