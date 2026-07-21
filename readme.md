@@ -47,7 +47,7 @@ Pokerom Trader is an open-source project that simplifies the process of trading 
   - Note: mail-holding Gen 2 Pokémon can't be deposited (mail can't be stored in a box, as in the real games); type sort/search covers the 151 Kanto Pokémon; Gen 3 boxed mons show no level (Gen 3 stores none)
 - **Gen 3 (GBA) support** — Ruby / Sapphire / Emerald / FireRed / LeafGreen (US/English). Withdrawing or trading a Gen 3 mon rebuilds its stats (level from EXP, base/IV/EV/nature); OT and PID are preserved so mons stay legal.
 - **Forward transfer (Gen 1/2 → Gen 3)** — pick a Gen 1/2 save + a Gen 3 save and move a Pokémon *up* a generation. It converts the data (DV→IV, level→EXP, fabricated PID for nature/ability), keeps the OT, and removes it from the source (a true one-way transfer). Obtainability-gated: it refuses species with no legal Gen 3 home (Mew, Celebi).
-- **Events (re-issue distribution tickets)** — grants the key item that unlocks an already-in-ROM event, so the *game itself* generates a fully legitimate Pokémon when you play to the spot. GS Ball (Crystal → Celebi), Eon Ticket (R/S/E → Latias/Latios), Mystic Ticket (E/FR/LG → Lugia/Ho-Oh), Aurora Ticket (E/FR/LG → Deoxys), Old Sea Map (Emerald → Mew). *(Adds the item; some events may also need an event flag — see below.)*
+- **Events (re-issue distribution tickets)** — grants the key item that unlocks an already-in-ROM event, so the *game itself* generates a fully legitimate Pokémon when you play to the spot. GS Ball (Crystal → Celebi), Eon Ticket (R/S/E → Latias/Latios), Mystic Ticket (E/FR/LG → Lugia/Ho-Oh), Aurora Ticket (E/FR/LG → Deoxys), Old Sea Map (Emerald → Mew). *For Gen 3 it also sets the in-game event flag so the trip actually appears — verified in-emulator for all four Emerald events.*
 - **Resizable window** — the UI scales to the window; on the save-file lists a taller window shows more rows.
 
 *Perfect Crystal save files seem to work.
@@ -62,7 +62,8 @@ Pokerom Trader is an open-source project that simplifies the process of trading 
 ## What's not working
 - See [issues tab](https://github.com/savaughn/pokerom-trader/issues) for current bugs
 - No JP Region support
-- **Events**: the ticket item is added, but some events may also need an in-game event flag set to appear (Gen 3 in particular). PKSav exposes no flag API, so setting flags is a per-game follow-up — test in an emulator with a far-enough save.
+- **Events (Gen 3)**: grants the ticket **and** sets the ferry-enable event flag; all four Emerald events are verified in-emulator. FireRed/LeafGreen and Ruby/Sapphire use the same mechanism with flags taken from the game decompilation but have not yet been play-tested on those specific ROMs.
+- **Events (GS Ball, Crystal)**: grants the item only; the Ilex-shrine trigger flag is story-gated and still needs Crystal-ROM confirmation, so it is not set yet.
 - No Gen 4+ (DS) support yet — so no Crystal→Platinum / SoulSilver routing
 - No Gen 3 daycare editing; no cross-gen *trade* involving Gen 3 (there is no legal one — use forward transfer instead)
 - No support for romhacks that change the save file structure (almost all of them)

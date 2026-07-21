@@ -467,6 +467,56 @@ enum pksav_error pksav_gen2_save_save(
     return error;
 }
 
+enum pksav_error pksav_gen2_save_get_event_flag(
+    const struct pksav_gen2_save* p_gen2_save,
+    uint16_t flag_id,
+    bool* p_flag_out
+)
+{
+    if(!p_gen2_save || !p_flag_out)
+    {
+        return PKSAV_ERROR_NULL_POINTER;
+    }
+    if(p_gen2_save->save_type != PKSAV_GEN2_SAVE_TYPE_CRYSTAL)
+    {
+        return PKSAV_ERROR_INVALID_SAVE;
+    }
+
+    const struct pksav_gen2_save_internal* p_internal = p_gen2_save->p_internal;
+    const uint8_t* p_flags = p_internal->p_raw_save + PKSAV_GEN2_CRYSTAL_EVENT_FLAGS_OFFSET;
+    *p_flag_out = (bool)((p_flags[flag_id >> 3] >> (flag_id & 7)) & 1u);
+    return PKSAV_ERROR_NONE;
+}
+
+enum pksav_error pksav_gen2_save_set_event_flag(
+    struct pksav_gen2_save* p_gen2_save,
+    uint16_t flag_id,
+    bool value
+)
+{
+    if(!p_gen2_save)
+    {
+        return PKSAV_ERROR_NULL_POINTER;
+    }
+    if(p_gen2_save->save_type != PKSAV_GEN2_SAVE_TYPE_CRYSTAL)
+    {
+        return PKSAV_ERROR_INVALID_SAVE;
+    }
+
+    struct pksav_gen2_save_internal* p_internal = p_gen2_save->p_internal;
+    uint8_t* p_flags = p_internal->p_raw_save + PKSAV_GEN2_CRYSTAL_EVENT_FLAGS_OFFSET;
+    uint8_t mask = (uint8_t)(1u << (flag_id & 7));
+    if(value)
+    {
+        p_flags[flag_id >> 3] |= mask;
+    }
+    else
+    {
+        p_flags[flag_id >> 3] = (uint8_t)(p_flags[flag_id >> 3] & (uint8_t)~mask);
+    }
+    return PKSAV_ERROR_NONE;
+}
+
 enum pksav_error pksav_gen2_free_save(
     struct pksav_gen2_save* p_gen2_save
 )
