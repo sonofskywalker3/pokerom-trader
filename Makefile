@@ -439,6 +439,25 @@ check:
 	@echo Running cppcheck...
 	cppcheck --std=c11 --enable=all --inconclusive --suppress=missingInclude --suppress=missingIncludeSystem --suppress=unusedFunction src/
 
+# Build and run the standalone unit tests (requires deps/pksav already built).
+# Each test is a self-contained C program with plain asserts; a nonzero exit
+# fails the target. Gen 4 cases self-skip when their (gitignored) fixtures are
+# absent, so this stays green on a clean checkout.
+TEST_INC = -Iinclude -Ideps/pksav/include -Ideps/pksav/build/include
+TEST_LIB = -Ldeps/pksav/build/lib -lpksav -lm
+.PHONY: test
+test:
+	@echo "== pksav_flag_test =="
+	$(CC) tests/pksav_flag_test.c $(TEST_INC) $(TEST_LIB) -o tests/pksav_flag_test.exe
+	@./tests/pksav_flag_test.exe
+	@echo "== events_apply_test =="
+	$(CC) tests/events_apply_test.c src/events.c $(TEST_INC) $(TEST_LIB) -o tests/events_apply_test.exe
+	@./tests/events_apply_test.exe
+	@echo "== gen4_transfer_test =="
+	$(CC) tests/gen4_transfer_test.c src/gen4_transfer.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen3_species.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_transfer_test.exe
+	@./tests/gen4_transfer_test.exe
+	@echo "== all tests passed =="
+
 clean:
 	@rm -f build/pokeromtrader
 	@rm -rf src/pokeromtrader.dSYM
