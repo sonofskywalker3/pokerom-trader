@@ -15,11 +15,19 @@
 #include "common.h"
 #include <stdbool.h>
 
+// Max event flags a single event sets (0-terminated list in flag_ids).
+#define PKMN_EVENT_MAX_FLAGS 3
+
 struct pkmn_event
 {
     SaveGenerationType gen;   // SAVE_GENERATION_2 or SAVE_GENERATION_3
     uint8_t save_type_mask;   // bit set per applicable pksav save_type value
     uint16_t item_id;         // key item to grant
+    // Event flag id(s) to set so the game actually offers the event. A flag id
+    // is the bit index into the game's event-flag array (pret decomp FLAG_*
+    // numbering for Gen 3). 0-terminated; unused slots are 0. Flags differ per
+    // game, so each row targets a single game (see events.c).
+    uint16_t flag_ids[PKMN_EVENT_MAX_FLAGS];
     const char *ticket;       // "GS Ball", "Eon Ticket", ...
     const char *pokemon;      // what it unlocks
     const char *location;     // where to go in-game

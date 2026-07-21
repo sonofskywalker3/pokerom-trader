@@ -165,7 +165,7 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             }
             else
             {
-                show_error_toast = true; // already have it / no room
+                show_error_toast = true; // Key Items pocket full / unsupported save
             }
         }
     }
@@ -180,7 +180,7 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     }
     if (show_error_toast)
     {
-        show_error_toast = !draw_toast_message("Already have that ticket", TOAST_SHORT, TOAST_ERROR);
+        show_error_toast = !draw_toast_message("Couldn't apply - Key Items pocket full", TOAST_SHORT, TOAST_ERROR);
     }
 
     end_virtual_frame();
