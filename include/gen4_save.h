@@ -41,6 +41,7 @@ struct gen4_layout
     uint32_t box_name_start; /* first box-name string (40 bytes / 20 chars each) */
     uint32_t current_box_off; /* offset of the current-box index within storage */
     uint32_t trainer_offset; /* trainer block within the general block */
+    uint32_t dex_offset;     /* Pokédex block within the general block */
 };
 
 /* Owns a heap copy of the whole 512 KB save; the *_base fields point at the
@@ -101,6 +102,18 @@ size_t gen4_box_name(const struct gen4_save *save, int box, char *out);
 /* Trainer OT name (out >= 8 bytes) and 16-bit trainer ID from the general block. */
 size_t gen4_trainer_name(const struct gen4_save *save, char *out);
 uint16_t gen4_trainer_id(const struct gen4_save *save);
+
+/* Mark National Dex number `dex` (1..493) as seen AND caught in the Pokédex.
+ * Layout (validated on real DP/Pt/Pearl/HG/SS saves against PKHeX's Zukan4):
+ * u32 magic 0xBEEFCAFE, caught bitfield @+0x04, seen bitfield @+0x44; bit
+ * index = dex-1, LSB-first. Refuses to write (no-op) if the magic isn't there. */
+void gen4_dex_set_seen_caught(struct gen4_save *save, uint16_t dex);
+
+/* Swap the raw 236-byte party slots (a,ia) <-> (b,ib) — the whole Gen 4 <->
+ * Gen 4 trade, since a PK4 is self-contained (encryption keyed by its own
+ * PID/checksum) and identical across DP/Pt/HGSS. Indices must be within each
+ * save's current party count. Returns false if either slot is out of range. */
+bool gen4_swap_party_slots(struct gen4_save *a, int ia, struct gen4_save *b, int ib);
 
 /* Recompute all footer CRCs and write the active copies back to `path`.
  * (Slice 3 — declared here for the module's public surface.) */

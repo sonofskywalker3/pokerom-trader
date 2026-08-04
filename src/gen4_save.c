@@ -31,15 +31,18 @@ static const struct gen4_layout k_layouts[] = {
     [GEN4_GAME_DP] = {.general_size = 0xC100, .storage_size = 0x121E0, .storage_start = 0xC100,
                       .party_offset = 0x98, .party_count_offset = 0x94, .crc_footer_skip = 0x14,
                       .box_data_start = 4, .box_stride = 0xFF0,
-                      .box_name_start = 0x11EE4, .current_box_off = 0, .trainer_offset = 0x64},
+                      .box_name_start = 0x11EE4, .current_box_off = 0, .trainer_offset = 0x64,
+                      .dex_offset = 0x12DC},
     [GEN4_GAME_PT] = {.general_size = 0xCF2C, .storage_size = 0x121E4, .storage_start = 0xCF2C,
                       .party_offset = 0xA0, .party_count_offset = 0x9C, .crc_footer_skip = 0x14,
                       .box_data_start = 4, .box_stride = 0xFF0,
-                      .box_name_start = 0x11EE4, .current_box_off = 0, .trainer_offset = 0x68},
+                      .box_name_start = 0x11EE4, .current_box_off = 0, .trainer_offset = 0x68,
+                      .dex_offset = 0x1328},
     [GEN4_GAME_HGSS] = {.general_size = 0xF628, .storage_size = 0x12310, .storage_start = 0xF700,
                         .party_offset = 0x98, .party_count_offset = 0x94, .crc_footer_skip = 0x10,
                         .box_data_start = 0, .box_stride = 0x1000,
-                        .box_name_start = 0x12008, .current_box_off = 0x12000, .trainer_offset = 0x64},
+                        .box_name_start = 0x12008, .current_box_off = 0x12000, .trainer_offset = 0x64,
+                        .dex_offset = 0x12B8},
 };
 
 static bool footer_magic_ok(uint32_t m)
@@ -308,6 +311,42 @@ uint16_t gen4_trainer_id(const struct gen4_save *save)
         return 0;
     }
     return rd16(save->data + save->general_base + save->layout.trainer_offset + 0x10);
+}
+
+/* The dex block leads with this magic in every game (checked on all 5 real
+ * saves); refusing to write without it protects against a layout mismatch. */
+#define GEN4_DEX_MAGIC 0xBEEFCAFEu
+
+void gen4_dex_set_seen_caught(struct gen4_save *save, uint16_t dex)
+{
+    if (!save || !save->data || dex < 1 || dex > GEN4_NATIONAL_DEX_MAX)
+    {
+        return;
+    }
+    uint8_t *block = save->data + save->general_base + save->layout.dex_offset;
+    if (rd32(block) != GEN4_DEX_MAGIC)
+    {
+        return;
+    }
+    int bit = dex - 1;
+    block[0x04 + (bit >> 3)] |= (uint8_t)(1u << (bit & 7)); /* caught */
+    block[0x44 + (bit >> 3)] |= (uint8_t)(1u << (bit & 7)); /* seen */
+}
+
+bool gen4_swap_party_slots(struct gen4_save *a, int ia, struct gen4_save *b, int ib)
+{
+    if (ia < 0 || ia >= (int)gen4_party_count(a) ||
+        ib < 0 || ib >= (int)gen4_party_count(b))
+    {
+        return false;
+    }
+    uint8_t *sa = gen4_party_slot_raw_mut(a, ia);
+    uint8_t *sb = gen4_party_slot_raw_mut(b, ib);
+    uint8_t tmp[GEN4_PK4_PARTY_SIZE];
+    memcpy(tmp, sa, GEN4_PK4_PARTY_SIZE);
+    memcpy(sa, sb, GEN4_PK4_PARTY_SIZE);
+    memcpy(sb, tmp, GEN4_PK4_PARTY_SIZE);
+    return true;
 }
 
 enum pksav_error gen4_save_save(const char *path, struct gen4_save *save)

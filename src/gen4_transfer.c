@@ -282,6 +282,9 @@ pksavhelper_error transfer_pkmn_gen3_to_gen4(PokemonSave *src, uint8_t src_index
         }
     }
 
+    /* Pal Park registers the arrival: mark it seen + caught in the Gen 4 dex. */
+    gen4_dex_set_seen_caught(g4, gen4_pk4_species(dec));
+
     remove_gba_party_mon(src, src_index);
     return error_none;
 }

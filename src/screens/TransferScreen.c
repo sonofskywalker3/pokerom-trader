@@ -186,7 +186,7 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
     }
     if (show_ok_toast)
     {
-        show_ok_toast = !draw_toast_message("Transferred up to Gen 3!", TOAST_SHORT, TOAST_SUCCESS);
+        show_ok_toast = !draw_toast_message(to_gen4 ? "Transferred up to Gen 4!" : "Transferred up to Gen 3!", TOAST_SHORT, TOAST_SUCCESS);
     }
     if (show_err_toast)
     {

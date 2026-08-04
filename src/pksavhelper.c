@@ -27,6 +27,22 @@ int error_handler(enum pksav_error error, const char *message)
 pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon_party_index)
 {
     enum pksav_error pksav_error;
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        const uint8_t *raw = gen4_party_slot_raw(&pkmn_save->save.gen4_save, pokemon_party_index);
+        if (raw == NULL)
+        {
+            return error_update_pokedex;
+        }
+        uint8_t dec[GEN4_PK4_PARTY_SIZE];
+        gen4_pk4_decrypt(raw, dec, true);
+        if (gen4_pk4_is_egg(dec))
+        {
+            return error_none; // an egg isn't dex-recorded until it hatches
+        }
+        gen4_dex_set_seen_caught(&pkmn_save->save.gen4_save, gen4_pk4_species(dec));
+        return error_none;
+    }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
         uint16_t internal = pksav_littleendian16(pkmn_save->save.gba_save.pokemon_storage.p_party->party[pokemon_party_index].pc_data.blocks.growth.species);
@@ -183,12 +199,17 @@ void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer)
     }
     case SAVE_GENERATION_4:
     {
-        // Gen 4 party isn't in the union PokemonPartyData; the Boxes screen reads
-        // party/box mons via bills_pc_get_view, so only name+id are needed here.
         char trainer_name[TRAINER_NAME_TEXT_MAX + 1] = "\0";
         gen4_trainer_name(&pkmn_save->save.gen4_save, trainer_name);
         strcpy(trainer->trainer_name, trainer_name);
         trainer->trainer_id = gen4_trainer_id(&pkmn_save->save.gen4_save);
+        // Snapshot the party decrypted so the trade UI can read it directly.
+        struct gen4_pokemon_party *party = &trainer->pokemon_party.gen4_pokemon_party;
+        party->count = gen4_party_count(&pkmn_save->save.gen4_save);
+        for (int i = 0; i < party->count; i++)
+        {
+            gen4_pk4_decrypt(gen4_party_slot_raw(&pkmn_save->save.gen4_save, i), party->dec[i], true);
+        }
         trainer->trainer_generation = SAVE_GENERATION_4;
         break;
     }
@@ -763,6 +784,16 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
 pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, PokemonSave *player2_save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2)
 {
     enum pksav_error pksav_error;
+
+    // Gen 4 <-> Gen 4: a PK4 is self-contained (encryption keyed by its own
+    // PID/checksum, no gen-internal species indices), so trading is a raw swap
+    // of the two 236-byte party slots — valid across DP/Pt/HGSS too.
+    if (player1_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        bool swapped = gen4_swap_party_slots(&player1_save->save.gen4_save, pkmn_party_index1,
+                                             &player2_save->save.gen4_save, pkmn_party_index2);
+        return swapped ? error_none : error_swap_pkmn;
+    }
 
     // Gen 3 <-> Gen 3: the entire party entry (pc_data + derived party_data)
     // travels together, so a trade is just exchanging the two structs. OT, PID,

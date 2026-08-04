@@ -3,6 +3,7 @@
 
 #include <pksav.h>
 #include "gen4_save.h" /* Gen 4 (DS) support — not in PKSav; our own parser. */
+#include "gen4_pkmn.h" /* PK4 sizes for the trainer_info party snapshot */
 
 #define SCREEN_WIDTH 800
 // Base (design) height. The actual virtual height can grow for list screens so
@@ -38,11 +39,20 @@ enum single_player_menu_types
     SINGLE_PLAYER_MENU_TYPE_EXIT
 };
 
+/* Decrypted snapshot of a Gen 4 party for display (the save itself keeps the
+ * mons encrypted; create_trainer refreshes this after every mutation). */
+struct gen4_pokemon_party
+{
+    uint8_t count;
+    uint8_t dec[GEN4_PARTY_MAX][GEN4_PK4_PARTY_SIZE]; /* decrypted, un-shuffled */
+};
+
 union PokemonPartyData
 {
     struct pksav_gen1_pokemon_party gen1_pokemon_party;
     struct pksav_gen2_pokemon_party gen2_pokemon_party;
     struct pksav_gba_pokemon_party gba_pokemon_party;
+    struct gen4_pokemon_party gen4_pokemon_party;
 };
 
 typedef enum
