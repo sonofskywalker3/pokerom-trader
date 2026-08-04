@@ -112,6 +112,34 @@ contiguous: digits '0'..'9' @0x0121, 'A'..'Z' @0x012B, 'a'..'z' @0x0145; space
 nicknames ("Peter", "Anthony", "Statistics", "Cave Flash") decode cleanly.
 Implemented in `gen4_pkmn.c` gen4_char().
 
+## Pokédex (validated)
+
+Offset of the dex block within the **general** block (from PKHeX's `SAV4*`
+sources, then verified against all five real saves — every natively-caught
+party mon has both bits set; mons inserted by external tools do not):
+
+| Game | dex offset |
+|------|-----------|
+| DP   | 0x12DC |
+| Pt   | 0x1328 |
+| HGSS | 0x12B8 |
+
+Layout: u32 magic **0xBEEFCAFE** @+0x00 (present in all five saves), caught
+bitfield @+0x04 (0x40 bytes), seen bitfield @+0x44 (0x40 bytes); bit index =
+`dex - 1`, LSB-first. Two more 0x40-byte regions follow (first/second seen
+gender, per PKHeX's Zukan4) — not written by this app; the game backfills
+gender-seen display on first dex view. Implemented in `gen4_save.c`
+`gen4_dex_set_seen_caught()` (guarded by the magic).
+
+## Gen 4 <-> Gen 4 trading
+
+A PK4 is fully self-contained: its encryption is keyed by its own checksum/PID,
+species are National Dex (no per-game index spaces), and DP/Pt/HGSS share the
+party format byte-for-byte. A trade is therefore a verbatim swap of the two
+236-byte party slots (`gen4_swap_party_slots()`), valid across games (DP <->
+HGSS included), followed by seen+caught dex bits for each received mon and a
+footer-CRC rewrite on save. Verified by round-trip in `tests/gen4_trade_test.c`.
+
 ## 12. Gen 3 -> Gen 4 transfer (Pal Park)
 
 Pal Park migrates a Gen 3 mon into Gen 4. Forward-only (Transporter semantics —

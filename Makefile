@@ -456,6 +456,9 @@ test:
 	@echo "== gen4_transfer_test =="
 	$(CC) tests/gen4_transfer_test.c src/gen4_transfer.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen3_species.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_transfer_test.exe
 	@./tests/gen4_transfer_test.exe
+	@echo "== gen4_trade_test =="
+	$(CC) tests/gen4_trade_test.c src/gen4_save.c src/gen4_pkmn.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_trade_test.exe
+	@./tests/gen4_trade_test.exe
 	@echo "== all tests passed =="
 
 clean:

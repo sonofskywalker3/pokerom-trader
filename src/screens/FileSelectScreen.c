@@ -196,12 +196,20 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
                 is_duplicate_save_file = trainer1->trainer_id == trainer2->trainer_id;
 
                 *is_same_generation = pkmn_save_player1->save_generation_type == pkmn_save_player2->save_generation_type;
-                // A Gen 1/2 + Gen 3 pairing is a one-way forward transfer (no legal
-                // cross-gen *trade* exists); everything else is a trade.
+                // A Gen 1/2 + Gen 3 or Gen 3 + Gen 4 pairing is a one-way forward
+                // transfer (no legal cross-gen *trade* exists); a Gen 1/2 + Gen 4
+                // pairing has no direct path at all (must route through Gen 3).
                 bool p1_gen3 = pkmn_save_player1->save_generation_type == SAVE_GENERATION_3;
                 bool p2_gen3 = pkmn_save_player2->save_generation_type == SAVE_GENERATION_3;
-                bool forward_transfer = p1_gen3 != p2_gen3;
-                if (forward_transfer || !is_duplicate_save_file)
+                bool p1_gen4 = pkmn_save_player1->save_generation_type == SAVE_GENERATION_4;
+                bool p2_gen4 = pkmn_save_player2->save_generation_type == SAVE_GENERATION_4;
+                bool forward_transfer = (p1_gen3 != p2_gen3) || (p1_gen4 != p2_gen4);
+                bool no_legal_path = (p1_gen4 != p2_gen4) && !p1_gen3 && !p2_gen3;
+                if (no_legal_path)
+                {
+                    show_incompatible_toast = true;
+                }
+                else if (forward_transfer || !is_duplicate_save_file)
                 {
                     *current_screen = forward_transfer ? SCREEN_TRANSFER : SCREEN_TRADE;
                     selected_saves_index[0] = -1;
@@ -275,7 +283,7 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
     }
     if (show_incompatible_toast)
     {
-        show_incompatible_toast = !draw_toast_message("Gen 3 can only trade with Gen 3!", TOAST_LONG, TOAST_ERROR);
+        show_incompatible_toast = !draw_toast_message("No Gen 1/2 <-> Gen 4 path! Route through Gen 3.", TOAST_LONG, TOAST_ERROR);
     }
 
     end_virtual_frame();
