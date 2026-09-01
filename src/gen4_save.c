@@ -333,6 +333,36 @@ void gen4_dex_set_seen_caught(struct gen4_save *save, uint16_t dex)
     block[0x44 + (bit >> 3)] |= (uint8_t)(1u << (bit & 7)); /* seen */
 }
 
+bool gen4_dex_get_seen(const struct gen4_save *save, uint16_t dex)
+{
+    if (!save || !save->data || dex < 1 || dex > GEN4_NATIONAL_DEX_MAX)
+    {
+        return false;
+    }
+    const uint8_t *block = save->data + save->general_base + save->layout.dex_offset;
+    if (rd32(block) != GEN4_DEX_MAGIC)
+    {
+        return false;
+    }
+    int bit = dex - 1;
+    return (block[0x44 + (bit >> 3)] >> (bit & 7)) & 1;
+}
+
+bool gen4_dex_get_caught(const struct gen4_save *save, uint16_t dex)
+{
+    if (!save || !save->data || dex < 1 || dex > GEN4_NATIONAL_DEX_MAX)
+    {
+        return false;
+    }
+    const uint8_t *block = save->data + save->general_base + save->layout.dex_offset;
+    if (rd32(block) != GEN4_DEX_MAGIC)
+    {
+        return false;
+    }
+    int bit = dex - 1;
+    return (block[0x04 + (bit >> 3)] >> (bit & 7)) & 1;
+}
+
 bool gen4_swap_party_slots(struct gen4_save *a, int ia, struct gen4_save *b, int ib)
 {
     if (ia < 0 || ia >= (int)gen4_party_count(a) ||

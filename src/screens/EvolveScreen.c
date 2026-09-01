@@ -195,7 +195,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
 
             // Draw DVs inline with stats
             uint8_t pkmn_dv[PKSAV_NUM_GB_IVS];
-            pksav_get_gb_IVs(&party_pkmn.pc_data.iv_data, pkmn_dv, sizeof(pkmn_dv));
+            gb_get_dvs(party_pkmn.pc_data.iv_data, pkmn_dv);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_HP]), dv_text_pos_x, container_rec.y + 100, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_ATTACK]), dv_text_pos_x, container_rec.y + 130, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_DEFENSE]), dv_text_pos_x, container_rec.y + 160, 20, WHITE);
@@ -226,7 +226,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
 
             // Draw DVs
             uint8_t pkmn_dv[PKSAV_NUM_GB_IVS];
-            pksav_get_gb_IVs(&party_pkmn.pc_data.iv_data, pkmn_dv, sizeof(pkmn_dv));
+            gb_get_dvs(party_pkmn.pc_data.iv_data, pkmn_dv);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_HP]), dv_text_pos_x, container_rec.y + 100, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_ATTACK]), dv_text_pos_x, container_rec.y + 130, 20, WHITE);
             shadow_text(TextFormat("%d", pkmn_dv[PKSAV_GB_IV_DEFENSE]), dv_text_pos_x, container_rec.y + 160, 20, WHITE);

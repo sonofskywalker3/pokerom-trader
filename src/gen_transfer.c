@@ -113,7 +113,7 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
     uint16_t internal = gen3_national_to_internal(s->dex);
 
     uint8_t dv[PKSAV_NUM_GB_IVS];
-    pksav_get_gb_IVs(&s->iv_data, dv, sizeof(dv));
+    gb_get_dvs(s->iv_data, dv);
 
     memset(out, 0, sizeof(*out));
 

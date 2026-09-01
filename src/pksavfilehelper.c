@@ -142,12 +142,56 @@ void load_savefile_from_path(const char *path, PokemonSave *pkmn_save)
  * @param pkmn_save a pointer to a PokemonSave struct save buffer
  * @param path the path to the save file
  */
+// Gen 1 keeps a complement-of-sum checksum for each box bank (SRAM banks 2
+// and 3) plus one per box; PKSav only maintains the main bank-1 checksum, so
+// refresh the box ones here after every write.
+static void gen1_refresh_box_checksums(const char *path)
+{
+    FILE *f = fopen(path, "rb+");
+    if (f == NULL)
+    {
+        return;
+    }
+    uint8_t buf[0x8000];
+    if (fread(buf, 1, sizeof(buf), f) != sizeof(buf))
+    {
+        fclose(f);
+        return;
+    }
+    for (int bank = 2; bank <= 3; bank++)
+    {
+        size_t base = (size_t)bank * 0x2000;
+        unsigned sum = 0;
+        for (size_t i = 0; i < 0x1A4C; i++)
+        {
+            sum += buf[base + i];
+        }
+        buf[base + 0x1A4C] = (uint8_t)~sum;
+        for (int box = 0; box < 6; box++)
+        {
+            unsigned box_sum = 0;
+            for (size_t i = 0; i < 0x462; i++)
+            {
+                box_sum += buf[base + (size_t)box * 0x462 + i];
+            }
+            buf[base + 0x1A4D + box] = (uint8_t)~box_sum;
+        }
+    }
+    fseek(f, 0x4000, SEEK_SET);
+    fwrite(buf + 0x4000, 1, 0x4000, f);
+    fclose(f);
+}
+
 pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
 {
     enum pksav_error err = PKSAV_ERROR_NONE;
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         err = pksav_gen1_save_save(path, &pkmn_save->save.gen1_save);
+        if (err == PKSAV_ERROR_NONE)
+        {
+            gen1_refresh_box_checksums(path);
+        }
     }
     else if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {

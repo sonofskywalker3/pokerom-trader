@@ -28,5 +28,6 @@ bool draw_toast_message(char *message, enum E_TOAST_DURATION duration, enum E_TO
 void reset_toast_message(void);
 bool draw_save_icon(int pos_x, int pos_y, bool is_visible);
 void draw_mail_icon(int x, int y);
+void draw_evo_method_icon(int method, int x, int y, int h, unsigned char alpha);
 
 #endif // COMPONENTS_H

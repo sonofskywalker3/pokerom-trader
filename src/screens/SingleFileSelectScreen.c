@@ -124,7 +124,7 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
     // Bottom bar
     DrawRectangleRec(bottom_bar_rec, WHITE);
     DrawLineEx((Vector2){bottom_bar_rec.x, bottom_bar_rec.y}, (Vector2){bottom_bar_rec.width, bottom_bar_rec.y}, 15, BLACK);
-    const char *next_button_text = menu_type == SINGLE_PLAYER_MENU_TYPE_BILLS_PC ? "Boxes >" : menu_type == SINGLE_PLAYER_MENU_TYPE_EVENTS ? "Events >" : "Evolve >";
+    const char *next_button_text = menu_type == SINGLE_PLAYER_MENU_TYPE_BILLS_PC ? "Boxes >" : menu_type == SINGLE_PLAYER_MENU_TYPE_EVENTS ? "Events >" : menu_type == SINGLE_PLAYER_MENU_TYPE_POKEDEX ? "Pokedex >" : "Evolve >";
     DrawText(next_button_text, evolve_button_rec.x + 15, evolve_button_rec.y + 10, 20, has_selected_save ? ui_selection == E_UI_EVOLVE ? LIGHTGRAY : BLACK : LIGHTGRAY);
 
     // Back button
@@ -194,6 +194,8 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
 
                 if (menu_type == SINGLE_PLAYER_MENU_TYPE_BILLS_PC)
                     *current_screen = SCREEN_BILLS_PC;
+                if (menu_type == SINGLE_PLAYER_MENU_TYPE_POKEDEX && pkmn_save->save_generation_type != SAVE_GENERATION_CORRUPTED)
+                    *current_screen = SCREEN_POKEDEX;
                 if (menu_type == SINGLE_PLAYER_MENU_TYPE_EVOLVE && pkmn_save->save_generation_type != SAVE_GENERATION_CORRUPTED)
                     *current_screen = SCREEN_EVOLVE;
                 if (menu_type == SINGLE_PLAYER_MENU_TYPE_EVENTS && pkmn_save->save_generation_type != SAVE_GENERATION_CORRUPTED)

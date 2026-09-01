@@ -88,6 +88,9 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
                 }
                 pksavhelper_error = update_seen_owned_pkmn(save_player1, selected_index_trainer1);
                 pksavhelper_error = update_seen_owned_pkmn(save_player2, selected_index_trainer2);
+                // Also heal any historical dex gaps while we're writing dex bits
+                pokedex_reconcile(save_player1);
+                pokedex_reconcile(save_player2);
                 if (pksavhelper_error != error_none)
                 {
                     show_trade_toast = true;

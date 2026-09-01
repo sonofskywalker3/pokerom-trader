@@ -405,7 +405,8 @@ void draw_raylib_screen_loop(
         set_dynamic_viewport(current_screen == SCREEN_FILE_SELECT ||
                              current_screen == SCREEN_BILLS_PC_FILE_SELECT ||
                              current_screen == SCREEN_EVOLVE_FILE_SELECT ||
-                             current_screen == SCREEN_EVENTS_FILE_SELECT);
+                             current_screen == SCREEN_EVENTS_FILE_SELECT ||
+                             current_screen == SCREEN_POKEDEX_FILE_SELECT);
 
         switch (current_screen)
         {
@@ -432,6 +433,12 @@ void draw_raylib_screen_loop(
             break;
         case SCREEN_BILLS_PC:
             draw_bills_pc(pkmn_save_player1, player1_save_path, trainer1, &trainerSelection[0], &current_screen);
+            break;
+        case SCREEN_POKEDEX_FILE_SELECT:
+            draw_file_select_single(save_file_data, pkmn_save_player1, player1_save_path, trainer1, &trainerSelection[0], SINGLE_PLAYER_MENU_TYPE_POKEDEX, &current_screen);
+            break;
+        case SCREEN_POKEDEX:
+            draw_pokedex(pkmn_save_player1, &trainerSelection[0], &current_screen);
             break;
         case SCREEN_EVOLVE_FILE_SELECT:
             draw_file_select_single(save_file_data, pkmn_save_player1, player1_save_path, trainer1, &trainerSelection[0], SINGLE_PLAYER_MENU_TYPE_EVOLVE, &current_screen);

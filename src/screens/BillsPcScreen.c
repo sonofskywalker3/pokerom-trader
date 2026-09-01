@@ -3,6 +3,8 @@
 #include "raylibhelper.h"
 #include "pksavhelper.h"
 #include "pksavfilehelper.h"
+#include "gen4_stats.h" /* gen4_species_name: National Dex -> name, all gens */
+#include "pkmn_evolutions.h"
 
 // Bill's PC — browse the party and all PC boxes, deposit / withdraw / swap
 // Pokémon, sort a box, and search by name / type / level.
@@ -23,6 +25,110 @@
 #define BILLS_INFO_Y 64
 #define BILLS_INFO_W 220
 #define BILLS_INFO_H 320
+
+// Tooltip for the evolve-method badges: filled while drawing slots, rendered
+// on top of everything at the end of the frame.
+static struct
+{
+    bool active;
+    char lines[PKMN_MAX_NEEDED_EVOS][80];
+    int line_count;
+    int width;   // widest line, px
+    int font;
+    Vector2 anchor; // top-center of the hovered icon
+    int below_y;    // y to fall back to when there's no room above
+} evo_tip;
+
+// Fill the tooltip with this method's missing evolutions.
+static void evo_tip_fill(int method, const struct pkmn_needed_evo *needed, uint8_t n,
+                         Vector2 anchor, int below_y)
+{
+    evo_tip.active = true;
+    evo_tip.anchor = anchor;
+    evo_tip.below_y = below_y;
+    evo_tip.font = 14;
+    evo_tip.width = 0;
+    evo_tip.line_count = 0;
+    for (uint8_t i = 0; i < n && evo_tip.line_count < PKMN_MAX_NEEDED_EVOS; i++)
+    {
+        if (needed[i].method != method)
+        {
+            continue;
+        }
+        char *line = evo_tip.lines[evo_tip.line_count];
+        const char *name = gen4_species_name(needed[i].dex);
+        switch (method)
+        {
+        case PKMN_EVO_LEVEL:
+            snprintf(line, sizeof(evo_tip.lines[0]), "%s  Lv%u", name, needed[i].level);
+            break;
+        case PKMN_EVO_STONE:
+            snprintf(line, sizeof(evo_tip.lines[0]), "%s  %s", name, needed[i].detail);
+            break;
+        case PKMN_EVO_TRADE:
+            if (needed[i].detail != NULL)
+            {
+                snprintf(line, sizeof(evo_tip.lines[0]), "%s  Trade holding %s", name, needed[i].detail);
+            }
+            else
+            {
+                snprintf(line, sizeof(evo_tip.lines[0]), "%s  Trade", name);
+            }
+            break;
+        case PKMN_EVO_BREED:
+            if (needed[i].detail != NULL)
+            {
+                snprintf(line, sizeof(evo_tip.lines[0]), "%s  Breed holding %s", name, needed[i].detail);
+            }
+            else
+            {
+                snprintf(line, sizeof(evo_tip.lines[0]), "%s  Breed", name);
+            }
+            break;
+        default:
+            snprintf(line, sizeof(evo_tip.lines[0]), "%s  %s", name, needed[i].detail ? needed[i].detail : "Special");
+            break;
+        }
+        int w = MeasureText(line, evo_tip.font);
+        if (w > evo_tip.width)
+        {
+            evo_tip.width = w;
+        }
+        evo_tip.line_count++;
+    }
+}
+
+// Render the pending tooltip near its icon; called last so it draws on top.
+static void evo_tip_draw(void)
+{
+    if (!evo_tip.active || evo_tip.line_count == 0)
+    {
+        return;
+    }
+    int line_h = evo_tip.font + 4;
+    int h = evo_tip.line_count * line_h + 8;
+    int w = evo_tip.width + 12;
+    int x = (int)evo_tip.anchor.x - w / 2;
+    if (x < 4)
+    {
+        x = 4;
+    }
+    if (x + w > SCREEN_WIDTH - 4)
+    {
+        x = SCREEN_WIDTH - 4 - w;
+    }
+    int y = (int)evo_tip.anchor.y - h - 4;
+    if (y < 4)
+    {
+        y = evo_tip.below_y + 4;
+    }
+    DrawRectangle(x, y, w, h, (Color){20, 20, 30, 235});
+    DrawRectangleLines(x, y, w, h, (Color){255, 205, 90, 255});
+    for (int i = 0; i < evo_tip.line_count; i++)
+    {
+        DrawText(evo_tip.lines[i], x + 6, y + 5 + i * line_h, evo_tip.font, RAYWHITE);
+    }
+}
 
 // Convert a string to lowercase into out (bounded).
 static void bills_to_lower(const char *in, char *out, int out_size)
@@ -48,6 +154,22 @@ static bool bills_ci_contains(const char *haystack, const char *needle)
     return strstr(h, n) != NULL;
 }
 
+// Gen-agnostic species display name (National Dex based; "?" when unknown).
+static const char *bills_species_name(const struct bills_pc_entry_view *view)
+{
+    return gen4_species_name(view->dex);
+}
+
+// True when the mon's nickname differs from its species name.
+static bool bills_is_nicknamed(const struct bills_pc_entry_view *view)
+{
+    char nick[64];
+    char species[64];
+    bills_to_lower(view->nickname, nick, sizeof(nick));
+    bills_to_lower(bills_species_name(view), species, sizeof(species));
+    return strcmp(nick, species) != 0;
+}
+
 // Does a stored Pokémon match the current search query (name / type / level)?
 static bool bills_entry_matches(const struct bills_pc_entry_view *view, const char *query)
 {
@@ -56,6 +178,10 @@ static bool bills_entry_matches(const struct bills_pc_entry_view *view, const ch
         return query[0] == '\0';
     }
     if (bills_ci_contains(view->nickname, query))
+    {
+        return true;
+    }
+    if (bills_ci_contains(bills_species_name(view), query))
     {
         return true;
     }
@@ -140,10 +266,67 @@ static bool bills_draw_slot(PokemonSave *pkmn_save, struct bills_pc_slot slot, R
     if (view.occupied)
     {
         DrawText(view.nickname, (int)rect.x + 6, (int)rect.y + 2, font_size, text_color);
+        int right_x = (int)(rect.x + rect.width) - 6;
         if (view.level > 0) // Gen 3 boxed mons store no level; skip the label
         {
             const char *lv = TextFormat("Lv%u", view.level);
-            DrawText(lv, (int)(rect.x + rect.width) - MeasureText(lv, font_size) - 6, (int)rect.y + 2, font_size, text_color);
+            right_x -= MeasureText(lv, font_size);
+            DrawText(lv, right_x, (int)rect.y + 2, font_size, text_color);
+            right_x -= 8;
+        }
+        if (view.dex > 0)
+        {
+            // Pokedex to-do badges: one icon per method that still leads to
+            // an unregistered entry (evolve, or breed a pre-evolution in
+            // Gen 2+); hover an icon for the details.
+            struct pkmn_needed_evo needed[PKMN_MAX_NEEDED_EVOS];
+            uint8_t needed_n = pkmn_needed_dex_tasks(pkmn_save, view.dex, needed);
+            if (needed_n > 0)
+            {
+                bool has_method[PKMN_EVO_METHOD_COUNT] = {false};
+                for (uint8_t i = 0; i < needed_n; i++)
+                {
+                    has_method[needed[i].method] = true;
+                }
+                int icon_h = font_size - 5;
+                int icon_y = (int)rect.y + 2 + (font_size - icon_h) / 2;
+                for (int m = PKMN_EVO_METHOD_COUNT - 1; m >= 0; m--)
+                {
+                    if (!has_method[m])
+                    {
+                        continue;
+                    }
+                    right_x -= icon_h;
+                    draw_evo_method_icon(m, right_x, icon_y, icon_h, text_color.a);
+                    Rectangle icon_rec = {(float)(right_x - 2), rect.y, (float)(icon_h + 4), rect.height};
+                    if (CheckCollisionPointRec(GetMousePosition(), icon_rec))
+                    {
+                        evo_tip_fill(m, needed, needed_n,
+                                     (Vector2){right_x + icon_h / 2.0f, rect.y},
+                                     (int)(rect.y + rect.height));
+                    }
+                    right_x -= 5;
+                }
+                right_x -= 3;
+            }
+        }
+        if (bills_is_nicknamed(&view))
+        {
+            // Nicknamed mon: fit the species name in (dimmed) so the row still
+            // says what the Pokémon actually is; skipped if it would collide.
+            const char *species = bills_species_name(&view);
+            int species_font = font_size >= 16 ? font_size - 4 : 10;
+            int species_w = MeasureText(species, species_font);
+            int nick_end = (int)rect.x + 6 + MeasureText(view.nickname, font_size);
+            if (right_x - species_w > nick_end + 8)
+            {
+                Color species_color = text_color;
+                if (species_color.a > 160)
+                {
+                    species_color.a = 160;
+                }
+                DrawText(species, right_x - species_w, (int)rect.y + 2 + (font_size - species_font), species_font, species_color);
+            }
         }
         if (hovered && out_hovered)
         {
@@ -164,6 +347,7 @@ static void bills_reset_state(PokemonSave *pkmn_save, int *box_view, bool *has_p
                               bool *search_active, bool *is_dirty)
 {
     bills_pc_normalize_current_box(pkmn_save);
+    pokedex_reconcile(pkmn_save); // heal dex gaps for mons actually present
     *box_view = bills_pc_current_box_num(pkmn_save);
     *has_pending = false;
     *sort_mode = BILLS_PC_SORT_NONE;
@@ -188,6 +372,9 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     static bool show_saving_icon = false;
     static bool show_saved_toast = false;
     static bool show_error_toast = false;
+    static bool show_dex_toast = false;
+    static enum E_TOAST_TYPE dex_toast_type = TOAST_SUCCESS;
+    static char dex_toast[64] = "\0";
 
     if (needs_init)
     {
@@ -225,6 +412,7 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     begin_virtual_frame();
     ClearBackground(RED);
     draw_background_grid();
+    evo_tip.active = false; // re-armed by whichever badge the mouse is over
 
     // Title
     shadow_text("Boxes", BILLS_PARTY_X, 10, 22, WHITE);
@@ -340,15 +528,51 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     if (have_info)
     {
         shadow_text(info_view.nickname, BILLS_INFO_X + 6, BILLS_INFO_Y + 30, 20, WHITE);
-        shadow_text(TextFormat("Level %u", info_view.level), BILLS_INFO_X + 6, BILLS_INFO_Y + 58, 18, WHITE);
+        // Species + dex line: tells what a nicknamed mon actually is.
+        if (info_view.dex > 0)
+        {
+            shadow_text(TextFormat("#%03u %s", info_view.dex, bills_species_name(&info_view)), BILLS_INFO_X + 6, BILLS_INFO_Y + 54, 14, (Color){220, 220, 220, 255});
+        }
+        shadow_text(TextFormat("Level %u", info_view.level), BILLS_INFO_X + 6, BILLS_INFO_Y + 76, 18, WHITE);
         const char *t1 = info_view.type1 == BILLS_PC_TYPE_UNKNOWN ? "?" : pkmn_type_name(info_view.type1);
         if (info_view.type2 != BILLS_PC_TYPE_UNKNOWN && info_view.type2 != info_view.type1)
         {
-            shadow_text(TextFormat("Type: %s/%s", t1, pkmn_type_name(info_view.type2)), BILLS_INFO_X + 6, BILLS_INFO_Y + 84, 16, WHITE);
+            shadow_text(TextFormat("Type: %s/%s", t1, pkmn_type_name(info_view.type2)), BILLS_INFO_X + 6, BILLS_INFO_Y + 102, 16, WHITE);
         }
         else
         {
-            shadow_text(TextFormat("Type: %s", t1), BILLS_INFO_X + 6, BILLS_INFO_Y + 84, 16, WHITE);
+            shadow_text(TextFormat("Type: %s", t1), BILLS_INFO_X + 6, BILLS_INFO_Y + 102, 16, WHITE);
+        }
+        // Dex entries this Pokemon can still register (evolve / breed), with the method.
+        if (info_view.dex > 0)
+        {
+            struct pkmn_needed_evo needed[PKMN_MAX_NEEDED_EVOS];
+            uint8_t needed_n = pkmn_needed_dex_tasks(pkmn_save, info_view.dex, needed);
+            if (needed_n > 0)
+            {
+                shadow_text("POKEDEX TO-DO:", BILLS_INFO_X + 6, BILLS_INFO_Y + 128, 14, (Color){255, 205, 90, 255});
+                int shown = needed_n <= 3 ? needed_n : 2;
+                for (int i = 0; i < shown; i++)
+                {
+                    const char *how;
+                    switch (needed[i].method)
+                    {
+                    case PKMN_EVO_LEVEL: how = TextFormat("Lv%u", needed[i].level); break;
+                    case PKMN_EVO_STONE: how = needed[i].detail; break;
+                    case PKMN_EVO_TRADE: how = "Trade"; break;
+                    case PKMN_EVO_BREED: how = needed[i].detail ? TextFormat("Breed, %s", needed[i].detail) : "Breed"; break;
+                    default: how = "Special"; break;
+                    }
+                    draw_evo_method_icon(needed[i].method, BILLS_INFO_X + 6, BILLS_INFO_Y + 147 + i * 17, 10, 255);
+                    shadow_text(TextFormat("%s (%s)", gen4_species_name(needed[i].dex), how),
+                                BILLS_INFO_X + 22, BILLS_INFO_Y + 146 + i * 17, 12, WHITE);
+                }
+                if (needed_n > shown)
+                {
+                    shadow_text(TextFormat("+%d more (hover row icons)", needed_n - shown),
+                                BILLS_INFO_X + 22, BILLS_INFO_Y + 146 + shown * 17, 12, (Color){200, 200, 200, 255});
+                }
+            }
         }
     }
     // Instructions
@@ -373,6 +597,19 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     const Rectangle back_button_rec = (Rectangle){BACK_BUTTON_X - 15, BACK_BUTTON_Y + 8, BUTTON_WIDTH, BUTTON_HEIGHT};
     bool back_hover = CheckCollisionPointRec(GetMousePosition(), back_button_rec);
     DrawText("< Back", (int)back_button_rec.x + 15, (int)back_button_rec.y + 10, 20, back_hover ? LIGHTGRAY : BLACK);
+
+    // Pokedex to-do box: pulls every mon with an evolve/breed job into the last box.
+    const int dex_box = num_boxes - 1;
+    const Rectangle dex_button_rec = (Rectangle){SCREEN_WIDTH / 2 - 100, NEXT_BUTTON_Y + 8, 200, BUTTON_HEIGHT};
+    bool dex_hover = CheckCollisionPointRec(GetMousePosition(), dex_button_rec);
+    {
+        const char *dex_label = TextFormat("Dex To-Do -> Box %d", dex_box + 1);
+        int label_w = MeasureText(dex_label, 18);
+        int icon_h = 14;
+        int start_x = (int)dex_button_rec.x + ((int)dex_button_rec.width - (label_w + icon_h + 6)) / 2;
+        draw_evo_method_icon(PKMN_EVO_BREED, start_x, (int)dex_button_rec.y + 12, icon_h, 255);
+        DrawText(dex_label, start_x + icon_h + 6, (int)dex_button_rec.y + 11, 18, dex_hover ? LIGHTGRAY : BLACK);
+    }
 
     const Rectangle save_button_rec = (Rectangle){NEXT_BUTTON_X - 15, NEXT_BUTTON_Y + 8, BUTTON_WIDTH, BUTTON_HEIGHT};
     bool save_hover = CheckCollisionPointRec(GetMousePosition(), save_button_rec);
@@ -455,7 +692,39 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
             has_pending = false;
             needs_init = true;
             trainerSelection->pkmn_party_index = -1;
+            // Unsaved box moves mutate the file-select screen's cached save
+            // in place; drop the cache so it reloads clean from disk.
+            if (is_dirty)
+                free_evolve_saves();
             *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
+        }
+        else if (dex_hover)
+        {
+            int wanted = 0, placed = 0;
+            int moved = bills_pc_fill_dex_box(pkmn_save, dex_box, &wanted, &placed);
+            has_pending = false;
+            box_view = dex_box;
+            if (moved > 0)
+            {
+                is_dirty = true;
+            }
+            if (wanted == 0)
+            {
+                snprintf(dex_toast, sizeof(dex_toast), "Nothing left to evolve%s",
+                         pkmn_save->save_generation_type == SAVE_GENERATION_1 ? "" : " or breed");
+                dex_toast_type = TOAST_INFO;
+            }
+            else if (placed < wanted)
+            {
+                snprintf(dex_toast, sizeof(dex_toast), "Box %d full: %d of %d to-dos", dex_box + 1, placed, wanted);
+                dex_toast_type = TOAST_ERROR;
+            }
+            else
+            {
+                snprintf(dex_toast, sizeof(dex_toast), "Box %d: %d Pokedex to-do%s", dex_box + 1, placed, placed == 1 ? "" : "s");
+                dex_toast_type = TOAST_SUCCESS;
+            }
+            show_dex_toast = true;
         }
         else if (save_hover && is_dirty)
         {
@@ -481,6 +750,12 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     {
         show_error_toast = !draw_toast_message("Can't move there", TOAST_SHORT, TOAST_ERROR);
     }
+    if (show_dex_toast)
+    {
+        show_dex_toast = !draw_toast_message(dex_toast, TOAST_MEDIUM, dex_toast_type);
+    }
+
+    evo_tip_draw();
 
     end_virtual_frame();
 
@@ -489,6 +764,8 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
         has_pending = false;
         needs_init = true;
         trainerSelection->pkmn_party_index = -1;
+        if (is_dirty)
+            free_evolve_saves();
         *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
     }
 }

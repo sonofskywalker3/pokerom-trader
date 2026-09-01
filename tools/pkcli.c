@@ -1,0 +1,194 @@
+/*
+ * pkcli — headless save inspector / trader for scripted use.
+ *
+ * Commands:
+ *   pkcli list  <save>                                    party + all boxes
+ *   pkcli dex   <save>                                    dex counts + owned/seen lists
+ *   pkcli move  <save> <party|box> <box#> <idx> <party|box> <box#> <idx>
+ *   pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>   same-gen party swap + dex update
+ *
+ * Mirrors the TradeScreen flow exactly: swap -> update_seen_owned_pkmn on both
+ * sides -> save_savefile_to_path. File backups are the caller's job.
+ */
+#include "pksavhelper.h"
+#include "pksavfilehelper.h"
+#include "gen3_species.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static int load_or_die(const char *path, PokemonSave *sav)
+{
+    load_savefile_from_path(path, sav);
+    if (sav->save_generation_type == SAVE_GENERATION_NONE ||
+        sav->save_generation_type == SAVE_GENERATION_CORRUPTED)
+    {
+        fprintf(stderr, "ERROR: could not load save: %s\n", path);
+        return 0;
+    }
+    return 1;
+}
+
+static void print_entry(const PokemonSave *sav, enum bills_pc_location loc, int box, int idx)
+{
+    if (!bills_pc_slot_occupied(sav, loc, box, idx))
+        return;
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(sav, loc, box, idx, &v);
+    if (!v.occupied)
+        return;
+    const char *name = v.dex ? gen3_national_dex_name(v.dex) : "?";
+    if (loc == BILLS_PC_LOC_PARTY)
+        printf("party    slot %2d: #%03u %-11s L%-3u si=%-3u nick=%s\n", idx, v.dex, name, v.level, v.species, v.nickname);
+    else
+        printf("box %2d   slot %2d: #%03u %-11s L%-3u si=%-3u nick=%s\n", box, idx, v.dex, name, v.level, v.species, v.nickname);
+}
+
+static int cmd_list(const char *path)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    struct trainer_info tr;
+    create_trainer(&sav, &tr);
+    printf("save: %s\ntrainer: %s  id=%u  gen=%d\n", path, tr.trainer_name, tr.trainer_id, sav.save_generation_type);
+    int pc = bills_pc_party_capacity(&sav);
+    for (int i = 0; i < pc; i++)
+        print_entry(&sav, BILLS_PC_LOC_PARTY, 0, i);
+    int nb = bills_pc_num_boxes(&sav);
+    int cap = bills_pc_box_capacity(&sav);
+    for (int b = 0; b < nb; b++)
+        for (int i = 0; i < cap; i++)
+            print_entry(&sav, BILLS_PC_LOC_BOX, b, i);
+    return 0;
+}
+
+static int cmd_dex(const char *path)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    uint16_t max = pokedex_species_count(&sav);
+    uint16_t seen_count, owned_count;
+    pokedex_counts(&sav, &seen_count, &owned_count);
+    printf("save: %s\ndex: seen %u owned %u / %u\n", path, seen_count, owned_count, max);
+    for (uint16_t d = 1; d <= max; d++)
+    {
+        bool seen, owned;
+        pokedex_get_entry(&sav, d, &seen, &owned);
+        if (owned)
+            printf("OWNED #%03u %s\n", d, gen3_national_dex_name(d));
+        else if (seen)
+            printf("SEEN  #%03u %s\n", d, gen3_national_dex_name(d));
+    }
+    return 0;
+}
+
+static int cmd_elig(const char *path)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    struct trainer_info tr;
+    create_trainer(&sav, &tr);
+    int pc = bills_pc_party_capacity(&sav);
+    for (int i = 0; i < pc; i++)
+    {
+        if (!bills_pc_slot_occupied(&sav, BILLS_PC_LOC_PARTY, 0, i))
+            continue;
+        struct bills_pc_entry_view v;
+        bills_pc_get_view(&sav, BILLS_PC_LOC_PARTY, 0, i, &v);
+        enum eligible_trade_status st = check_trade_eligibility(&tr, (uint8_t)i);
+        const char *why =
+            st == E_TRADE_STATUS_ELIGIBLE ? "ELIGIBLE" :
+            st == E_TRADE_STATUS_HM_MOVE ? "BLOCKED-HM" :
+            st == E_TRADE_STATUS_MAIL ? "BLOCKED-MAIL" : "BLOCKED-GEN2";
+        printf("party slot %2d: #%03u %-11s %s\n", i, v.dex, gen3_national_dex_name(v.dex), why);
+    }
+    return 0;
+}
+
+static int parse_loc(const char *s, enum bills_pc_location *out)
+{
+    if (strcmp(s, "party") == 0) { *out = BILLS_PC_LOC_PARTY; return 1; }
+    if (strcmp(s, "box") == 0)   { *out = BILLS_PC_LOC_BOX;   return 1; }
+    return 0;
+}
+
+static int cmd_move(const char *path, char **a)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    bills_pc_normalize_current_box(&sav);
+    struct bills_pc_slot src, dst;
+    if (!parse_loc(a[0], &src.location) || !parse_loc(a[3], &dst.location))
+    {
+        fprintf(stderr, "ERROR: location must be 'party' or 'box'\n");
+        return 1;
+    }
+    src.box_num = atoi(a[1]); src.index = atoi(a[2]);
+    dst.box_num = atoi(a[4]); dst.index = atoi(a[5]);
+    pksavhelper_error err = bills_pc_move_pkmn(&sav, src, dst);
+    if (err != error_none)
+    {
+        fprintf(stderr, "ERROR: move failed (%d)\n", err);
+        return 1;
+    }
+    bills_pc_flush_current_box(&sav);
+    if (save_savefile_to_path(&sav, (char *)path) != error_none)
+    {
+        fprintf(stderr, "ERROR: save write failed\n");
+        return 1;
+    }
+    printf("moved ok\n");
+    return 0;
+}
+
+static int cmd_trade(const char *p1, int i1, const char *p2, int i2)
+{
+    PokemonSave s1, s2;
+    if (!load_or_die(p1, &s1) || !load_or_die(p2, &s2)) return 1;
+    if (s1.save_generation_type != s2.save_generation_type)
+    {
+        fprintf(stderr, "ERROR: cross-gen trade not supported by pkcli\n");
+        return 1;
+    }
+    struct bills_pc_entry_view v1, v2;
+    bills_pc_get_view(&s1, BILLS_PC_LOC_PARTY, 0, i1, &v1);
+    bills_pc_get_view(&s2, BILLS_PC_LOC_PARTY, 0, i2, &v2);
+    if (!v1.occupied || !v2.occupied)
+    {
+        fprintf(stderr, "ERROR: empty party slot (%d occ=%d, %d occ=%d)\n", i1, v1.occupied, i2, v2.occupied);
+        return 1;
+    }
+    pksavhelper_error err = swap_pkmn_at_index_between_saves(&s1, &s2, (uint8_t)i1, (uint8_t)i2);
+    if (err != error_none) { fprintf(stderr, "ERROR: swap failed (%d)\n", err); return 1; }
+    err = update_seen_owned_pkmn(&s1, (uint8_t)i1);
+    if (err != error_none) { fprintf(stderr, "ERROR: dex update save1 failed (%d)\n", err); return 1; }
+    err = update_seen_owned_pkmn(&s2, (uint8_t)i2);
+    if (err != error_none) { fprintf(stderr, "ERROR: dex update save2 failed (%d)\n", err); return 1; }
+    if (save_savefile_to_path(&s1, (char *)p1) != error_none) { fprintf(stderr, "ERROR: write save1\n"); return 1; }
+    if (save_savefile_to_path(&s2, (char *)p2) != error_none) { fprintf(stderr, "ERROR: write save2\n"); return 1; }
+    printf("traded: %s (#%03u %s) <-> %s (#%03u %s)\n",
+           p1, v1.dex, gen3_national_dex_name(v1.dex),
+           p2, v2.dex, gen3_national_dex_name(v2.dex));
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    if (argc >= 3 && strcmp(argv[1], "list") == 0)
+        return cmd_list(argv[2]);
+    if (argc >= 3 && strcmp(argv[1], "dex") == 0)
+        return cmd_dex(argv[2]);
+    if (argc >= 3 && strcmp(argv[1], "elig") == 0)
+        return cmd_elig(argv[2]);
+    if (argc == 9 && strcmp(argv[1], "move") == 0)
+        return cmd_move(argv[2], &argv[3]);
+    if (argc == 6 && strcmp(argv[1], "trade") == 0)
+        return cmd_trade(argv[2], atoi(argv[3]), argv[4], atoi(argv[5]));
+    fprintf(stderr,
+            "usage:\n"
+            "  pkcli list <save>\n"
+            "  pkcli dex <save>\n"
+            "  pkcli move <save> <party|box> <box#> <idx> <party|box> <box#> <idx>\n"
+            "  pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>\n");
+    return 2;
+}

@@ -108,6 +108,8 @@ uint16_t gen4_trainer_id(const struct gen4_save *save);
  * u32 magic 0xBEEFCAFE, caught bitfield @+0x04, seen bitfield @+0x44; bit
  * index = dex-1, LSB-first. Refuses to write (no-op) if the magic isn't there. */
 void gen4_dex_set_seen_caught(struct gen4_save *save, uint16_t dex);
+bool gen4_dex_get_seen(const struct gen4_save *save, uint16_t dex);
+bool gen4_dex_get_caught(const struct gen4_save *save, uint16_t dex);
 
 /* Swap the raw 236-byte party slots (a,ia) <-> (b,ib) — the whole Gen 4 <->
  * Gen 4 trade, since a PK4 is self-contained (encryption keyed by its own
