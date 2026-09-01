@@ -459,6 +459,15 @@ test:
 	@echo "== gen4_trade_test =="
 	$(CC) tests/gen4_trade_test.c src/gen4_save.c src/gen4_pkmn.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_trade_test.exe
 	@./tests/gen4_trade_test.exe
+	@echo "== pokedex_read_test =="
+	$(CC) tests/pokedex_read_test.c src/pksavhelper.c src/pkmn_evolutions.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c $(TEST_INC) $(TEST_LIB) -o tests/pokedex_read_test.exe
+	@./tests/pokedex_read_test.exe
+	@echo "== evolution_table_test =="
+	$(CC) tests/evolution_table_test.c src/pkmn_evolutions.c src/pksavhelper.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c $(TEST_INC) $(TEST_LIB) -o tests/evolution_table_test.exe
+	@./tests/evolution_table_test.exe
+	@echo "== dex_box_test =="
+	$(CC) tests/dex_box_test.c src/pkmn_evolutions.c src/pksavhelper.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c $(TEST_INC) $(TEST_LIB) -o tests/dex_box_test.exe
+	@./tests/dex_box_test.exe
 	@echo "== all tests passed =="
 
 clean:

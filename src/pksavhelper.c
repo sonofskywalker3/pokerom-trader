@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <math.h>
@@ -10,6 +11,7 @@
 #include "gen4_pkmn.h" /* Gen 4 PK4 decode for the Boxes view */
 #include "gen4_save.h" /* Gen 4 raw slot accessors for moves */
 #include "gen4_stats.h" /* Gen 4 party-stat rebuild on withdraw */
+#include "pkmn_evolutions.h" /* Pokedex to-do box */
 
 int error_handler(enum pksav_error error, const char *message)
 {
@@ -322,25 +324,42 @@ enum eligible_evolution_status check_trade_evolution_gen3(PokemonSave *pkmn_save
     return missing_item ? E_EVO_STATUS_MISSING_ITEM : E_EVO_STATUS_NOT_ELIGIBLE;
 }
 
+// Gen 1/2 DVs live in a big-endian 16-bit bitset; pksav's accessors expect
+// the host-order value (Attack in the top nibble), so convert around them.
+// Passing the raw field swaps Attack<->Speed and Defense<->Special on x86.
+void gb_get_dvs(uint16_t raw_iv_data, uint8_t *dvs_out)
+{
+    uint16_t host = pksav_bigendian16(raw_iv_data);
+    pksav_get_gb_IVs(&host, dvs_out, PKSAV_NUM_GB_IVS);
+}
+
+void gb_set_dv(enum pksav_gb_IV stat, uint8_t value, uint16_t *p_raw_iv_data)
+{
+    uint16_t host = pksav_bigendian16(*p_raw_iv_data);
+    pksav_set_gb_IV(stat, value, &host);
+    *p_raw_iv_data = pksav_bigendian16(host);
+}
+
 // Function to calculate HP based on base stat, IV, Stat Exp, and level
-uint8_t calculate_hp(uint8_t level, uint8_t base_hp, uint8_t dv_hp, uint16_t stat_exp)
+// (16-bit: a level-100 mon can exceed 255 HP)
+uint16_t calculate_hp(uint8_t level, uint8_t base_hp, uint8_t dv_hp, uint16_t stat_exp)
 {
     float hp_calc = (base_hp + dv_hp) * 2 + floor(ceil(sqrt(stat_exp)) / 4);
     hp_calc = hp_calc * level / 100.0;
     hp_calc = floor(hp_calc) + level + 10;
 
-    return (uint8_t)hp_calc;
+    return (uint16_t)hp_calc;
 }
 
 // Function to calculate stats (Attack, Defense, Special, Speed)
 // based on base stat, IV, Stat Exp, and level
-uint8_t calculate_stat(uint8_t level, uint8_t base_stat, uint8_t dv, uint16_t stat_exp)
+uint16_t calculate_stat(uint8_t level, uint8_t base_stat, uint8_t dv, uint16_t stat_exp)
 {
     float stat_calc = (base_stat + dv) * 2 + floor(ceil(sqrt(stat_exp)) / 4);
     stat_calc = (stat_calc * level) / 100.0;
     stat_calc = floor(stat_calc) + 5;
 
-    return (uint8_t)stat_calc;
+    return (uint16_t)stat_calc;
 }
 /************************************************************************
  * Simulate the random number generation for Generation 1
@@ -441,9 +460,9 @@ void update_pkmn_DVs(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
     for (int i = PKSAV_GB_IV_ATTACK; i < PKSAV_NUM_GB_IVS; i++)
     {
         if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
-            pksav_set_gb_IV(i, traded_pkmn_rand_dvs[i], &pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data);
+            gb_set_dv(i, traded_pkmn_rand_dvs[i], &pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data);
         else
-            pksav_set_gb_IV(i, traded_pkmn_rand_dvs[i], &pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data);
+            gb_set_dv(i, traded_pkmn_rand_dvs[i], &pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data);
     }
 }
 
@@ -460,7 +479,10 @@ void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 
     // Get the pokemon's DVs
     uint8_t pkmn_dvs[PKSAV_NUM_GB_IVS];
-    pksav_get_gb_IVs(&pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data, pkmn_dvs, sizeof(pkmn_dvs));
+    gb_get_dvs(pkmn_save->save_generation_type == SAVE_GENERATION_1
+                   ? pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data
+                   : pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.iv_data,
+               pkmn_dvs);
 
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
@@ -477,7 +499,7 @@ void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
             [PKSAV_GB_IV_SPECIAL] = pksav_bigendian16(pkmn_ev_data.ev_spcl),
             [PKSAV_GB_IV_HP] = pksav_bigendian16(pkmn_ev_data.ev_hp)};
 
-        uint8_t pkmn_stats[PKSAV_GEN1_STAT_COUNT] = {
+        uint16_t pkmn_stats[PKSAV_GEN1_STAT_COUNT] = {
             // Calculate the pokemon's stats
             [PKSAV_GEN1_STAT_ATTACK] = calculate_stat(pkmn_level, pkmn_base_stats_gen1[species_index].atk, pkmn_dvs[PKSAV_GB_IV_ATTACK], pkmn_evs[PKSAV_GB_IV_ATTACK]),
             [PKSAV_GEN1_STAT_DEFENSE] = calculate_stat(pkmn_level, pkmn_base_stats_gen1[species_index].def, pkmn_dvs[PKSAV_GB_IV_DEFENSE], pkmn_evs[PKSAV_GB_IV_DEFENSE]),
@@ -509,7 +531,7 @@ void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
             [PKSAV_GB_IV_SPECIAL] = pksav_bigendian16(pkmn_ev_data.ev_spcl),
             [PKSAV_GB_IV_HP] = pksav_bigendian16(pkmn_ev_data.ev_hp)};
 
-        uint8_t pkmn_stats[PKSAV_GEN2_STAT_COUNT] = {
+        uint16_t pkmn_stats[PKSAV_GEN2_STAT_COUNT] = {
             // Calculate the pokemon's stats
             [PKSAV_GEN2_STAT_ATTACK] = calculate_stat(pkmn_level, pkmn_base_stats_gen2[species_index].atk, pkmn_dvs[PKSAV_GB_IV_ATTACK], pkmn_evs[PKSAV_GB_IV_ATTACK]),
             [PKSAV_GEN2_STAT_DEFENSE] = calculate_stat(pkmn_level, pkmn_base_stats_gen2[species_index].def, pkmn_dvs[PKSAV_GB_IV_DEFENSE], pkmn_evs[PKSAV_GB_IV_DEFENSE]),
@@ -1423,7 +1445,9 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
         {
             species_arr = storage->p_party->species;
             nicknames = storage->p_party->nicknames;
-            out_view->level = storage->p_party->party[index].pc_data.level;
+            // pc_data.level is a stale copy from when the mon was caught/boxed;
+            // party_data.level is the authoritative level for party members.
+            out_view->level = storage->p_party->party[index].party_data.level;
         }
         else
         {
@@ -1465,6 +1489,136 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
     else
     {
         out_view->dex = out_view->species;
+    }
+}
+
+// --- Pokédex read helpers (strictly read-only; dex bits are only ever
+// written by an actual trade/transfer via update_seen_owned_pkmn) ---
+
+uint16_t pokedex_species_count(const PokemonSave *pkmn_save)
+{
+    switch (pkmn_save->save_generation_type)
+    {
+    case SAVE_GENERATION_1:
+        return 151;
+    case SAVE_GENERATION_2:
+        return 251;
+    case SAVE_GENERATION_3:
+        return 386;
+    case SAVE_GENERATION_4:
+        return GEN4_NATIONAL_DEX_MAX;
+    default:
+        return 0;
+    }
+}
+
+void pokedex_get_entry(const PokemonSave *pkmn_save, uint16_t dex, bool *seen, bool *owned)
+{
+    *seen = false;
+    *owned = false;
+    if (dex < 1 || dex > pokedex_species_count(pkmn_save))
+    {
+        return;
+    }
+    switch (pkmn_save->save_generation_type)
+    {
+    case SAVE_GENERATION_1:
+        pksav_get_pokedex_bit(pkmn_save->save.gen1_save.pokedex_lists.p_seen, dex, seen);
+        pksav_get_pokedex_bit(pkmn_save->save.gen1_save.pokedex_lists.p_owned, dex, owned);
+        break;
+    case SAVE_GENERATION_2:
+        pksav_get_pokedex_bit(pkmn_save->save.gen2_save.pokedex_lists.p_seen, dex, seen);
+        pksav_get_pokedex_bit(pkmn_save->save.gen2_save.pokedex_lists.p_owned, dex, owned);
+        break;
+    case SAVE_GENERATION_3:
+        pksav_get_pokedex_bit(pkmn_save->save.gba_save.pokedex.p_seenA, dex, seen);
+        pksav_get_pokedex_bit(pkmn_save->save.gba_save.pokedex.p_owned, dex, owned);
+        break;
+    case SAVE_GENERATION_4:
+        *seen = gen4_dex_get_seen(&pkmn_save->save.gen4_save, dex);
+        *owned = gen4_dex_get_caught(&pkmn_save->save.gen4_save, dex);
+        break;
+    default:
+        break;
+    }
+    if (*owned) // a caught mon has necessarily been seen, even if a bit is odd
+    {
+        *seen = true;
+    }
+}
+
+void pokedex_counts(const PokemonSave *pkmn_save, uint16_t *seen_count, uint16_t *owned_count)
+{
+    *seen_count = 0;
+    *owned_count = 0;
+    uint16_t max = pokedex_species_count(pkmn_save);
+    for (uint16_t dex = 1; dex <= max; dex++)
+    {
+        bool seen, owned;
+        pokedex_get_entry(pkmn_save, dex, &seen, &owned);
+        if (seen)
+            (*seen_count)++;
+        if (owned)
+            (*owned_count)++;
+    }
+}
+
+// Set seen+owned for one National Dex entry, any generation.
+static void pokedex_mark_owned(PokemonSave *pkmn_save, uint16_t dex)
+{
+    if (dex == 0 || dex > pokedex_species_count(pkmn_save))
+    {
+        return;
+    }
+    switch (pkmn_save->save_generation_type)
+    {
+    case SAVE_GENERATION_1:
+        pksav_set_pokedex_bit(pkmn_save->save.gen1_save.pokedex_lists.p_seen, dex, true);
+        pksav_set_pokedex_bit(pkmn_save->save.gen1_save.pokedex_lists.p_owned, dex, true);
+        break;
+    case SAVE_GENERATION_2:
+        pksav_set_pokedex_bit(pkmn_save->save.gen2_save.pokedex_lists.p_seen, dex, true);
+        pksav_set_pokedex_bit(pkmn_save->save.gen2_save.pokedex_lists.p_owned, dex, true);
+        break;
+    case SAVE_GENERATION_3:
+        pksav_gba_pokedex_set_has_seen(&pkmn_save->save.gba_save.pokedex, dex, true);
+        pksav_set_pokedex_bit(pkmn_save->save.gba_save.pokedex.p_owned, dex, true);
+        break;
+    case SAVE_GENERATION_4:
+        gen4_dex_set_seen_caught(&pkmn_save->save.gen4_save, dex);
+        break;
+    default:
+        break;
+    }
+}
+
+// The games guarantee that any Pokemon in the party or a box is recorded
+// seen+owned in the Pokedex. Saves touched by older versions of this app can
+// have gaps (e.g. a traded-in mon whose owned bit was never set); walk every
+// occupied slot and restore the invariant.
+void pokedex_reconcile(PokemonSave *pkmn_save)
+{
+    struct bills_pc_entry_view view;
+    for (int i = 0; i < bills_pc_party_capacity(pkmn_save); i++)
+    {
+        bills_pc_get_view(pkmn_save, BILLS_PC_LOC_PARTY, 0, i, &view);
+        if (view.occupied)
+        {
+            pokedex_mark_owned(pkmn_save, view.dex);
+        }
+    }
+    int boxes = bills_pc_num_boxes(pkmn_save);
+    int capacity = bills_pc_box_capacity(pkmn_save);
+    for (int b = 0; b < boxes; b++)
+    {
+        for (int i = 0; i < capacity; i++)
+        {
+            bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, b, i, &view);
+            if (view.occupied)
+            {
+                pokedex_mark_owned(pkmn_save, view.dex);
+            }
+        }
     }
 }
 
@@ -1535,6 +1689,16 @@ static struct g1_ctx g1_get(PokemonSave *s, enum bills_pc_location loc, int box)
 static void g1_capture(struct g1_ctx *c, int i, struct g1_mon *m)
 {
     m->pc = c->is_party ? c->party[i].pc_data : c->entries[i];
+    if (c->is_party)
+    {
+        // Gen 1 only maintains party_data.level while a mon is in the party;
+        // the game copies it into the box-level byte on deposit, so do the same.
+        uint8_t live = c->party[i].party_data.level;
+        if (live >= 1 && live <= 100)
+        {
+            m->pc.level = live;
+        }
+    }
     m->species = c->species[i];
     memcpy(m->otname, c->otnames[i], sizeof(m->otname));
     memcpy(m->nickname, c->nicknames[i], sizeof(m->nickname));
@@ -1544,7 +1708,24 @@ static void g1_capture(struct g1_ctx *c, int i, struct g1_mon *m)
 static void g1_finalize_party(PokemonSave *s, int i)
 {
     struct pksav_gen1_party_pokemon *p = &s->save.gen1_save.pokemon_storage.p_party->party[i];
-    p->party_data.level = p->pc_data.level;
+    // The Gen 1 box level byte goes stale the moment a mon levels up in the
+    // party, so derive the real level from EXP the way the game's own box
+    // withdrawal does, then refresh the stored byte.
+    uint8_t internal = s->save.gen1_save.pokemon_storage.p_party->species[i];
+    uint8_t level = p->pc_data.level;
+    if (internal <= SI_VICTREEBEL && species_gen1_to_gen2[internal] > 0)
+    {
+        uint32_t exp = ((uint32_t)p->pc_data.exp[0] << 16) |
+                       ((uint32_t)p->pc_data.exp[1] << 8) |
+                       (uint32_t)p->pc_data.exp[2];
+        int from_exp = gen4_level_from_exp(exp, gen4_growth_rate_for_dex(species_gen1_to_gen2[internal]));
+        if (from_exp >= 2 && from_exp <= 100)
+        {
+            level = (uint8_t)from_exp;
+        }
+    }
+    p->pc_data.level = level;
+    p->party_data.level = level;
     update_pkmn_stats(s, i); // fills max_hp/atk/... and pc_data.current_hp
     p->pc_data.condition = PKSAV_GB_CONDITION_NONE;
 }
@@ -2608,4 +2789,277 @@ void bills_pc_flush_current_box(PokemonSave *pkmn_save)
         *pkmn_save->save.gen2_save.pokemon_storage.p_current_box =
             *pkmn_save->save.gen2_save.pokemon_storage.pp_boxes[cur];
     }
+}
+
+// -------------------- Pokedex to-do box --------------------
+
+struct dex_box_cand
+{
+    struct bills_pc_slot slot;
+    uint16_t dex;
+    uint8_t level;
+    uint8_t copies; // copies of this species the box wants
+    bool in_target;
+    bool selected;
+};
+
+// Copies of `dex` the to-do box wants: one per direct evolution branch that
+// still leads to an unregistered entry, or one if breeding is its only job.
+static uint8_t dex_box_copies_wanted(const PokemonSave *s, uint16_t dex)
+{
+    struct pkmn_needed_evo tmp[PKMN_MAX_NEEDED_EVOS];
+    int copies = 0;
+    if (pkmn_needed_evolutions(s, dex, tmp) > 0)
+    {
+        uint16_t max_dex = pokedex_species_count(s);
+        const struct pkmn_evo_edge *evos[PKMN_MAX_DIRECT_EVOS];
+        uint8_t n = pkmn_direct_evolutions(dex, evos);
+        for (uint8_t i = 0; i < n; i++)
+        {
+            if (evos[i]->to > max_dex)
+            {
+                continue;
+            }
+            bool seen = false, owned = false;
+            pokedex_get_entry(s, evos[i]->to, &seen, &owned);
+            if (!owned || pkmn_needed_evolutions(s, evos[i]->to, tmp) > 0)
+            {
+                copies++;
+            }
+        }
+        if (copies == 0)
+        {
+            copies = 1;
+        }
+    }
+    else if (pkmn_can_breed(s, dex) && pkmn_needed_preevolutions(s, dex, tmp) > 0)
+    {
+        copies = 1;
+    }
+    return (uint8_t)copies;
+}
+
+static int dex_box_cand_cmp(const void *pa, const void *pb)
+{
+    const struct dex_box_cand *a = pa, *b = pb;
+    if (a->dex != b->dex)
+    {
+        return a->dex < b->dex ? -1 : 1;
+    }
+    if (a->in_target != b->in_target)
+    {
+        return a->in_target ? -1 : 1; // keep what is already there
+    }
+    if (a->level != b->level)
+    {
+        return a->level > b->level ? -1 : 1; // closest to evolving first
+    }
+    if (a->slot.box_num != b->slot.box_num)
+    {
+        return a->slot.box_num < b->slot.box_num ? -1 : 1;
+    }
+    return a->slot.index - b->slot.index;
+}
+
+// Scan every box for Pokemon with dex jobs and mark which copies the target
+// box should hold. Returns the candidate count; *out_wanted is the number the
+// box would take with unlimited room.
+static int dex_box_select(const PokemonSave *s, int target, struct dex_box_cand *cands, int max_cands, int *out_wanted)
+{
+    int num_boxes = bills_pc_num_boxes(s);
+    int cap = bills_pc_box_capacity(s);
+    int n = 0;
+    for (int b = 0; b < num_boxes && n < max_cands; b++)
+    {
+        for (int i = 0; i < cap && n < max_cands; i++)
+        {
+            if (!bills_pc_slot_occupied(s, BILLS_PC_LOC_BOX, b, i))
+            {
+                continue;
+            }
+            struct bills_pc_entry_view v;
+            bills_pc_get_view(s, BILLS_PC_LOC_BOX, b, i, &v);
+            if (!v.occupied || v.dex == 0)
+            {
+                continue;
+            }
+            uint8_t copies = dex_box_copies_wanted(s, v.dex);
+            if (copies == 0)
+            {
+                continue;
+            }
+            cands[n].slot = (struct bills_pc_slot){BILLS_PC_LOC_BOX, b, i};
+            cands[n].dex = v.dex;
+            cands[n].level = v.level;
+            cands[n].copies = copies;
+            cands[n].in_target = (b == target);
+            cands[n].selected = false;
+            n++;
+        }
+    }
+    qsort(cands, n, sizeof(cands[0]), dex_box_cand_cmp);
+
+    int wanted = 0, selected = 0, taken = 0;
+    uint16_t last_dex = 0;
+    for (int i = 0; i < n; i++)
+    {
+        if (cands[i].dex != last_dex)
+        {
+            last_dex = cands[i].dex;
+            taken = 0;
+        }
+        if (taken < cands[i].copies)
+        {
+            wanted++;
+            taken++;
+            if (selected < cap)
+            {
+                cands[i].selected = true;
+                selected++;
+            }
+        }
+    }
+    *out_wanted = wanted;
+    return n;
+}
+
+int bills_pc_fill_dex_box(PokemonSave *pkmn_save, int box_num, int *out_wanted, int *out_placed)
+{
+    static struct dex_box_cand cands[GEN4_NUM_BOXES * GEN4_BOX_SLOTS];
+    const int max_cands = (int)(sizeof(cands) / sizeof(cands[0]));
+    int cap = bills_pc_box_capacity(pkmn_save);
+    int wanted = 0, placed = 0, moved = 0;
+    if (box_num < 0 || box_num >= bills_pc_num_boxes(pkmn_save))
+    {
+        if (out_wanted) *out_wanted = 0;
+        if (out_placed) *out_placed = 0;
+        return 0;
+    }
+
+    // Each pass re-selects from the current layout and moves one chosen mon
+    // in; selected occupants are never evicted, so every pass makes progress.
+    for (int pass = 0; pass <= cap * 2; pass++)
+    {
+        int n = dex_box_select(pkmn_save, box_num, cands, max_cands, &wanted);
+        int src = -1;
+        placed = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (cands[i].selected && cands[i].in_target)
+            {
+                placed++;
+            }
+            else if (cands[i].selected && src < 0)
+            {
+                src = i;
+            }
+        }
+        if (src < 0)
+        {
+            break; // everything chosen is in the box
+        }
+
+        struct bills_pc_slot dst = {BILLS_PC_LOC_BOX, box_num, -1};
+        for (int i = 0; i < cap; i++)
+        {
+            if (!bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_BOX, box_num, i))
+            {
+                dst.index = i;
+                break;
+            }
+        }
+        if (dst.index < 0)
+        {
+            // Full: evict an occupant that is not one of the keepers.
+            for (int i = 0; i < cap && dst.index < 0; i++)
+            {
+                bool keeper = false;
+                for (int c = 0; c < n; c++)
+                {
+                    if (cands[c].selected && cands[c].in_target && cands[c].slot.index == i)
+                    {
+                        keeper = true;
+                        break;
+                    }
+                }
+                if (!keeper)
+                {
+                    dst.index = i;
+                }
+            }
+        }
+        if (dst.index < 0 || bills_pc_move_pkmn(pkmn_save, cands[src].slot, dst) != error_none)
+        {
+            break;
+        }
+        moved++;
+    }
+
+    // Make it exclusively the to-do box: hand any leftover occupant that is
+    // not a keeper to the first free slot elsewhere (lowest box first).
+    for (int pass = 0; pass < cap; pass++)
+    {
+        int n = dex_box_select(pkmn_save, box_num, cands, max_cands, &wanted);
+        int victim = -1;
+        for (int i = 0; i < cap && victim < 0; i++)
+        {
+            if (!bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_BOX, box_num, i))
+            {
+                continue;
+            }
+            bool keeper = false;
+            for (int c = 0; c < n; c++)
+            {
+                if (cands[c].selected && cands[c].in_target && cands[c].slot.index == i)
+                {
+                    keeper = true;
+                    break;
+                }
+            }
+            if (!keeper)
+            {
+                victim = i;
+            }
+        }
+        if (victim < 0)
+        {
+            break;
+        }
+        struct bills_pc_slot dst = {BILLS_PC_LOC_BOX, -1, -1};
+        int num_boxes = bills_pc_num_boxes(pkmn_save);
+        for (int b = 0; b < num_boxes && dst.box_num < 0; b++)
+        {
+            if (b == box_num)
+            {
+                continue;
+            }
+            for (int i = 0; i < cap; i++)
+            {
+                if (!bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_BOX, b, i))
+                {
+                    dst.box_num = b;
+                    dst.index = i;
+                    break;
+                }
+            }
+        }
+        if (dst.box_num < 0)
+        {
+            break; // every other box is full; it stays
+        }
+        struct bills_pc_slot src = {BILLS_PC_LOC_BOX, box_num, victim};
+        if (bills_pc_move_pkmn(pkmn_save, src, dst) != error_none)
+        {
+            break;
+        }
+        moved++;
+    }
+
+    if (moved > 0)
+    {
+        bills_pc_sort_box(pkmn_save, box_num, BILLS_PC_SORT_DEX);
+    }
+    if (out_wanted) *out_wanted = wanted;
+    if (out_placed) *out_placed = placed;
+    return moved;
 }

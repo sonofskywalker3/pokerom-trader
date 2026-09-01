@@ -90,12 +90,77 @@ static const char *const NATIONAL_DEX_NAMES[GEN3_NATIONAL_DEX_MAX + 1] = {
     /* 386 */ "Deoxys"
 };
 
+/* Internal index 277..411 -> National Dex. Gen 3's internal species order is
+ * NOT national order inside the Hoenn block (pret: gSpeciesToNationalPokedexNum),
+ * so a linear offset is wrong for most of it — this table is the pret order. */
+static const uint16_t HOENN_INTERNAL_TO_NATIONAL[135] = {
+    /* 277 Treecko   */ 252, 253, 254, 255, 256, 257, 258, 259, 260,
+    /* 286 Poochyena */ 261, 262, 263, 264, 265, 266, 267, 268, 269,
+    /* 295 Lotad     */ 270, 271, 272, 273, 274, 275,
+    /* 301 Nincada   */ 290, 291, 292,
+    /* 304 Taillow   */ 276, 277,
+    /* 306 Shroomish */ 285, 286,
+    /* 308 Spinda    */ 327,
+    /* 309 Wingull   */ 278, 279,
+    /* 311 Surskit   */ 283, 284,
+    /* 313 Wailmer   */ 320, 321,
+    /* 315 Skitty    */ 300, 301,
+    /* 317 Kecleon   */ 352,
+    /* 318 Baltoy    */ 343, 344,
+    /* 320 Nosepass  */ 299,
+    /* 321 Torkoal   */ 324,
+    /* 322 Sableye   */ 302,
+    /* 323 Barboach  */ 339, 340,
+    /* 325 Luvdisc   */ 370,
+    /* 326 Corphish  */ 341, 342,
+    /* 328 Feebas    */ 349, 350,
+    /* 330 Carvanha  */ 318, 319,
+    /* 332 Trapinch  */ 328, 329, 330,
+    /* 335 Makuhita  */ 296, 297,
+    /* 337 Electrike */ 309, 310,
+    /* 339 Numel     */ 322, 323,
+    /* 341 Spheal    */ 363, 364, 365,
+    /* 344 Cacnea    */ 331, 332,
+    /* 346 Snorunt   */ 361, 362,
+    /* 348 Lunatone  */ 337, 338,
+    /* 350 Azurill   */ 298,
+    /* 351 Spoink    */ 325, 326,
+    /* 353 Plusle    */ 311, 312,
+    /* 355 Mawile    */ 303,
+    /* 356 Meditite  */ 307, 308,
+    /* 358 Swablu    */ 333, 334,
+    /* 360 Wynaut    */ 360,
+    /* 361 Duskull   */ 355, 356,
+    /* 363 Roselia   */ 315,
+    /* 364 Slakoth   */ 287, 288, 289,
+    /* 367 Gulpin    */ 316, 317,
+    /* 369 Tropius   */ 357,
+    /* 370 Whismur   */ 293, 294, 295,
+    /* 373 Clamperl  */ 366, 367, 368,
+    /* 376 Absol     */ 359,
+    /* 377 Shuppet   */ 353, 354,
+    /* 379 Seviper   */ 336,
+    /* 380 Zangoose  */ 335,
+    /* 381 Relicanth */ 369,
+    /* 382 Aron      */ 304, 305, 306,
+    /* 385 Castform  */ 351,
+    /* 386 Volbeat   */ 313, 314,
+    /* 388 Lileep    */ 345, 346, 347, 348,
+    /* 392 Ralts     */ 280, 281, 282,
+    /* 395 Bagon     */ 371, 372, 373, 374, 375, 376,
+    /* 401 Regirock  */ 377, 378, 379,
+    /* 404 Kyogre    */ 382, 383, 384,
+    /* 407 Latias    */ 380, 381,
+    /* 409 Jirachi   */ 385, 386,
+    /* 411 Chimecho  */ 358,
+};
+
 uint16_t gen3_internal_to_national(uint16_t internal_index)
 {
     if (internal_index == 0) return 0;
     if (internal_index <= 251) return internal_index;         /* identity */
     if (internal_index >= 277 && internal_index <= 411)
-        return (uint16_t)(internal_index - 25);               /* Hoenn block */
+        return HOENN_INTERNAL_TO_NATIONAL[internal_index - 277];
     return 0;                                                 /* unused/glitch */
 }
 
@@ -103,7 +168,12 @@ uint16_t gen3_national_to_internal(uint16_t national_dex)
 {
     if (national_dex < 1 || national_dex > GEN3_NATIONAL_DEX_MAX) return 0;
     if (national_dex <= 251) return national_dex;             /* identity */
-    return (uint16_t)(national_dex + 25);                     /* Hoenn block */
+    for (uint16_t i = 0; i < 135; i++)
+    {
+        if (HOENN_INTERNAL_TO_NATIONAL[i] == national_dex)
+            return (uint16_t)(i + 277);
+    }
+    return 0;
 }
 
 const char *gen3_national_dex_name(uint16_t national_dex)

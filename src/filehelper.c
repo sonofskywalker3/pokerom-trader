@@ -48,6 +48,11 @@ int get_save_files(struct save_file_data *save_data)
         int num_saves = 0;
         do
         {
+            // FindFirstFile's *.sav also matches 8.3 short names, which pulls
+            // in .sav_bak backups — require the real name to end in .sav.
+            size_t name_len = strlen(find_file_data.cFileName);
+            if (name_len < 4 || _stricmp(find_file_data.cFileName + name_len - 4, ".sav") != 0)
+                continue;
             // Combine the base path and file name
             char full_path[MAX_FILE_PATH_CHAR];
             sprintf(full_path, "%s/%s", save_dir, find_file_data.cFileName);

@@ -160,12 +160,12 @@ typedef unsigned char uint8_t;
 #define SI_CHARMELEON (uint8_t)178
 #define SI_WARTORTLE (uint8_t)179
 #define SI_CHARIZARD (uint8_t)180
-#define SI_ODDISH (uint8_t)184
-#define SI_GLOOM (uint8_t)185
-#define SI_VILEPLUME (uint8_t)186
-#define SI_BELLSPROUT (uint8_t)187
-#define SI_WEEPINBELL (uint8_t)188
-#define SI_VICTREEBEL (uint8_t)189
+#define SI_ODDISH (uint8_t)185
+#define SI_GLOOM (uint8_t)186
+#define SI_VILEPLUME (uint8_t)187
+#define SI_BELLSPROUT (uint8_t)188
+#define SI_WEEPINBELL (uint8_t)189
+#define SI_VICTREEBEL (uint8_t)190
 
 // Gen 2 all pokemon index matches pokedex
 #define BULBASAUR (uint8_t)1

@@ -2,6 +2,7 @@
 #include "filehelper.h"
 #include "event_sprites.h"
 #include "event_header.h"
+#include "pokedex_header.h"
 
 // Event-Pokémon sprites + "Events" title for the details pane, loaded once.
 static Texture2D g_event_tex[EVENT_SPRITE_COUNT];
@@ -32,6 +33,24 @@ static void ensure_event_textures(void)
     g_event_tex_loaded = true;
 }
 
+// "Pokedex" title for the details pane (same Pokemon Solid recipe), loaded once.
+static Texture2D g_pokedex_header;
+static bool g_pokedex_header_loaded = false;
+
+static void ensure_pokedex_header(void)
+{
+    if (g_pokedex_header_loaded)
+        return;
+    Image hdr = {0};
+    hdr.data = pokedex_header_px;
+    hdr.width = POKEDEX_HEADER_W;
+    hdr.height = POKEDEX_HEADER_H;
+    hdr.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+    hdr.mipmaps = 1;
+    g_pokedex_header = LoadTextureFromImage(hdr);
+    g_pokedex_header_loaded = true;
+}
+
 enum main_menu_buttons
 {
     BUTTON_NONE = -1,
@@ -39,6 +58,7 @@ enum main_menu_buttons
     BUTTON_EVOLVE,
     BUTTON_BILLS_PC,
     BUTTON_EVENTS,
+    BUTTON_POKEDEX,
     BUTTON_SETTINGS,
     BUTTON_QUIT,
     BUTTON_COUNT
@@ -255,15 +275,16 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     DrawCircle(SCREEN_WIDTH * 1.15, SCREEN_HEIGHT * 1.725, 730, WHITE);
 
     // Start position of menu buttons (raised to fit six items)
-    const Vector2 text_position_start = (Vector2){75, 175};
+    const Vector2 text_position_start = (Vector2){75, 158};
     // Button height offset from start position
-    const int rec_height_offset = 50;
+    const int rec_height_offset = 45;
     // Menu button text size
-    const int text_size = 30;
+    const int text_size = 26;
     // Text at bottom of details pane
     const Vector2 details_text = (Vector2){details_rec.x - 100, SCREEN_HEIGHT - 30};
 
     static int rand_pokeball_index = -1;
+    static int pokedex_pokeball_index = -1;
     static enum selected_console_texture {
         CONSOLE_NONE = -1,
         CONSOLE_LEFT,
@@ -417,8 +438,38 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
         reset_anim_pos(BUTTON_EVENTS);
     }
 
+    // On Hover/Click Pokedex button
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 4), "Pokedex", text_size))
+    {
+        set_active_animation(BUTTON_POKEDEX);
+    }
+
+    // Update/Draw animated Pokedex details pane
+    if (active_anim_index == BUTTON_POKEDEX)
+    {
+        slide_animate_details_pane(BUTTON_POKEDEX);
+        ensure_pokedex_header();
+        // Stylized "Pokedex" header, matching the other panes (~15% smaller
+        // like Events so it sits inside the pane).
+        DrawTextureEx(g_pokedex_header,
+                      (Vector2){details_rec.x + anim_from_right[BUTTON_POKEDEX], details_rec.y + 25},
+                      0, 0.85f, WHITE);
+        // Pokeball below the header (this pane keeps its own random pick;
+        // rand_pokeball_index belongs to the Evolve pane's lifecycle)
+        if (pokedex_pokeball_index == T_NONE)
+            pokedex_pokeball_index = GetRandomValue(T_POKEBALL_0, T_POKEBALL_3);
+        DrawTextureEx(textures[pokedex_pokeball_index], (Vector2){details_rec.x + anim_from_right[BUTTON_POKEDEX] + 15, details_rec.y + 80}, 0, 2, WHITE);
+        // Bottom details text
+        DrawText("See seen and owned pokemon per save", details_text.x + anim_from_right[BUTTON_POKEDEX] + 40, details_text.y, 20, BLACK);
+    }
+    else
+    {
+        pokedex_pokeball_index = T_NONE;
+        reset_anim_pos(BUTTON_POKEDEX);
+    }
+
     // On Hover/Click Settings button
-    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 4), "Settings", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 5), "Settings", text_size))
     {
         set_active_animation(BUTTON_SETTINGS);
     }
@@ -440,7 +491,7 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
     }
 
     // On Hover/Click Quit button
-    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 5), "Quit", text_size))
+    if (draw_menu_button(text_position_start.x, text_position_start.y + (rec_height_offset * 6), "Quit", text_size))
     {
         set_active_animation(BUTTON_QUIT);
     }
@@ -497,6 +548,17 @@ void draw_main_menu(struct save_file_data *save_file_data, GameScreen *current_s
             {
                 no_dir_err = get_save_files(save_file_data);
                 *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
+                reset_all_anim_pos();
+                clear_active_animation();
+            }
+            break;
+        }
+        case BUTTON_POKEDEX:
+        {
+            if (active_hover_index == BUTTON_POKEDEX)
+            {
+                no_dir_err = get_save_files(save_file_data);
+                *current_screen = SCREEN_POKEDEX_FILE_SELECT;
                 reset_all_anim_pos();
                 clear_active_animation();
             }

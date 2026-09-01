@@ -93,6 +93,17 @@ struct bills_pc_entry_view
 // and repacked box-by-box (party untouched). Persisted like a per-box sort.
 void bills_pc_sort_all_boxes(PokemonSave *pkmn_save, enum bills_pc_sort_mode mode);
 
+// Gather every boxed Pokemon that still has a Pokedex job -- an unregistered
+// evolution ahead of it, or (Gen 2+) an unregistered pre-evolution it could
+// breed -- into box `box_num`, swapping out whatever else lives there. Takes
+// one copy of a species per unregistered evolution branch (Eevee brings three
+// in Gen 1) and prefers the highest-level copy. The party is left alone.
+// Leftover occupants with no job are handed to free slots in other boxes.
+// Returns the number of moves made; *out_wanted is how many the box would
+// hold with unlimited room, *out_placed how many to-do mons are in it now.
+int bills_pc_fill_dex_box(PokemonSave *pkmn_save, int box_num, int *out_wanted, int *out_placed);
+
+
 // --- Bill's PC (single-save box management) ---
 int bills_pc_num_boxes(const PokemonSave *pkmn_save);
 int bills_pc_box_capacity(const PokemonSave *pkmn_save);
@@ -122,12 +133,24 @@ pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, Po
 pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player1_save, PokemonSave *player2_save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2);
 void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer);
 pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
+
+// Pokédex read helpers (read-only; only trades/transfers ever write dex bits)
+uint16_t pokedex_species_count(const PokemonSave *pkmn_save);
+void pokedex_get_entry(const PokemonSave *pkmn_save, uint16_t dex, bool *seen, bool *owned);
+void pokedex_counts(const PokemonSave *pkmn_save, uint16_t *seen_count, uint16_t *owned_count);
+// Dex repair: mark seen+owned every species actually present in the save.
+void pokedex_reconcile(PokemonSave *pkmn_save);
 enum eligible_evolution_status check_trade_evolution_gen1(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 enum eligible_evolution_status check_trade_evolution_gen3(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 void generate_random_number_step(void);
 void update_pkmn_DVs(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
+// Big-endian-aware wrappers around pksav's GB DV accessors (see pksavhelper.c).
+void gb_get_dvs(uint16_t raw_iv_data, uint8_t *dvs_out);
+void gb_set_dv(enum pksav_gb_IV stat, uint8_t value, uint16_t *p_raw_iv_data);
+uint16_t calculate_hp(uint8_t level, uint8_t base_hp, uint8_t dv_hp, uint16_t stat_exp);
+uint16_t calculate_stat(uint8_t level, uint8_t base_stat, uint8_t dv, uint16_t stat_exp);
 void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 void generate_rand_num_step(SaveGenerationType save_generation_type);
 enum eligible_trade_status check_trade_eligibility(struct trainer_info *trainer, uint8_t pkmn_party_index);
