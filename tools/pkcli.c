@@ -7,6 +7,7 @@
  *   pkcli move  <save> <party|box> <box#> <idx> <party|box> <box#> <idx>
  *   pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>   same-gen party swap + dex update
  *   pkcli evolve <save> <partyIdx>                        trade-evolve a party mon in place
+ *   pkcli denick <save>                                   reset all nicknames to species names (Gen 1/2)
  *   pkcli copy  <src> <party|box> <box#> <idx> <dst> <dstBox#>
  *                                                         one-way copy into dst box (Gen 1/Gen 2 same gen, or Gen 1 -> Gen 2 Time Capsule style)
  *
@@ -370,6 +371,76 @@ static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx
     return 0;
 }
 
+/* Encode a species name the way the game stores an un-nicknamed mon's name:
+ * uppercase, Gen 1/2 charset, 0x50-terminated and 0x50-padded to 11 bytes. */
+static void encode_species_name(uint16_t dex, uint8_t out[11])
+{
+    const char *nm = gen3_national_dex_name(dex);
+    memset(out, 0x50, 11);
+    int o = 0;
+    for (const char *p = nm; *p && o < 10; p++)
+    {
+        char c = *p;
+        uint8_t b;
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        if (c >= 'A' && c <= 'Z') b = (uint8_t)(0x80 + (c - 'A'));
+        else if (c >= '0' && c <= '9') b = (uint8_t)(0xF6 + (c - '0'));
+        else if (c == '\'') b = 0xE0;
+        else if (c == '.') b = 0xE8;
+        else if (c == ' ') continue;                       /* "Mr. Mime" -> MR.MIME */
+        else if (c == '-' && (dex == 29 || dex == 32)) { p++; b = (dex == 29) ? 0xF5 : 0xEF; } /* Nidoran gender glyph */
+        else if (c == '-') b = 0xE3;                       /* Ho-Oh */
+        else continue;
+        out[o++] = b;
+    }
+    out[o] = 0x50;
+}
+
+/* Reset every nickname in the party and all boxes to the species name. */
+static int cmd_denick(const char *path)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    if (sav.save_generation_type != SAVE_GENERATION_1 && sav.save_generation_type != SAVE_GENERATION_2)
+    {
+        fprintf(stderr, "ERROR: denick supports Gen 1 and Gen 2 saves only\n");
+        return 1;
+    }
+    bills_pc_normalize_current_box(&sav);
+    int changed = 0;
+    int nb = bills_pc_num_boxes(&sav);
+    for (int b = -1; b < nb; b++)
+    {
+        enum bills_pc_location loc = (b < 0) ? BILLS_PC_LOC_PARTY : BILLS_PC_LOC_BOX;
+        struct copy_cont c;
+        if (!copy_cont_init(&sav, loc, b < 0 ? 0 : b, &c)) continue;
+        for (int i = 0; i < *c.count; i++)
+        {
+            struct bills_pc_entry_view v;
+            bills_pc_get_view(&sav, loc, b < 0 ? 0 : b, i, &v);
+            if (!v.occupied || v.dex == 0) continue;
+            uint8_t want[11];
+            encode_species_name(v.dex, want);
+            uint8_t *nick = c.nicknames + i * c.name_len;
+            /* compare up to and including the terminator only */
+            size_t n = 0; while (n < 10 && want[n] != 0x50) n++;
+            if (memcmp(nick, want, n + 1) == 0) continue;
+            printf("renamed %s %d slot %d: #%03u %s  %s -> %s\n",
+                   b < 0 ? "party" : "box", b < 0 ? 0 : b, i, v.dex, gen3_national_dex_name(v.dex), v.nickname, gen3_national_dex_name(v.dex));
+            memcpy(nick, want, 11);
+            changed++;
+        }
+    }
+    bills_pc_flush_current_box(&sav);
+    if (changed && save_savefile_to_path(&sav, (char *)path) != error_none)
+    {
+        fprintf(stderr, "ERROR: write failed\n");
+        return 1;
+    }
+    printf("denick: %d nickname(s) reset\n", changed);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "list") == 0)
@@ -384,6 +455,8 @@ int main(int argc, char **argv)
         return cmd_copy(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), argv[6], atoi(argv[7]));
     if (argc == 7 && strcmp(argv[1], "copy") == 0) /* legacy box-only form */
         return cmd_copy(argv[2], "box", atoi(argv[3]), atoi(argv[4]), argv[5], atoi(argv[6]));
+    if (argc == 3 && strcmp(argv[1], "denick") == 0)
+        return cmd_denick(argv[2]);
     if (argc == 4 && strcmp(argv[1], "evolve") == 0)
         return cmd_evolve(argv[2], atoi(argv[3]));
     if (argc == 6 && strcmp(argv[1], "trade") == 0)
@@ -396,6 +469,7 @@ int main(int argc, char **argv)
             "  pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>\n"
             "  pkcli copy <src> <party|box> <box#> <idx> <dst> <dstBox#>   one-way; Gen 1, Gen 2, or Gen 1 -> Gen 2\n"
             "  pkcli evolve <save> <partyIdx>\n"
-            "  pkcli elig <save>\n");
+            "  pkcli elig <save>\n"
+            "  pkcli denick <save>                     reset every nickname to the species name\n");
     return 2;
 }
