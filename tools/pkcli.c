@@ -57,6 +57,9 @@ static int cmd_list(const char *path)
     int pc = bills_pc_party_capacity(&sav);
     for (int i = 0; i < pc; i++)
         print_entry(&sav, BILLS_PC_LOC_PARTY, 0, i);
+    /* Gen 1/2 keep the live copy of the current box in a separate area;
+     * the per-box bank slot for it can be stale or empty. Sync before reading. */
+    bills_pc_normalize_current_box(&sav);
     int nb = bills_pc_num_boxes(&sav);
     int cap = bills_pc_box_capacity(&sav);
     for (int b = 0; b < nb; b++)
