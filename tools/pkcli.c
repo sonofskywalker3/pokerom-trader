@@ -7,6 +7,7 @@
  *   pkcli move  <save> <party|box> <box#> <idx> <party|box> <box#> <idx>
  *   pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>   same-gen party swap + dex update
  *   pkcli evolve <save> <partyIdx>                        trade-evolve a party mon in place
+ *   pkcli release <save> <party|box> <box#> <idx>        remove a mon, compact the container
  *   pkcli denick <save>                                   reset all nicknames to species names (Gen 1/2)
  *   pkcli copy  <src> <party|box> <box#> <idx> <dst> <dstBox#>
  *                                                         one-way copy into dst box (Gen 1/Gen 2 same gen, or Gen 1 -> Gen 2 Time Capsule style)
@@ -441,6 +442,45 @@ static int cmd_denick(const char *path)
     return 0;
 }
 
+/* Remove one mon from the party or a box, compacting the slots after it
+ * (species list, entries, OT names, nicknames, and Gen 2 party mail). */
+static int cmd_release(const char *path, const char *loc_s, int box, int idx)
+{
+    PokemonSave sav;
+    enum bills_pc_location loc;
+    if (!parse_loc(loc_s, &loc)) { fprintf(stderr, "ERROR: location must be 'party' or 'box'\n"); return 1; }
+    if (!load_or_die(path, &sav)) return 1;
+    bills_pc_normalize_current_box(&sav);
+    struct copy_cont c;
+    if (!copy_cont_init(&sav, loc, box, &c)) { fprintf(stderr, "ERROR: bad box number\n"); return 1; }
+    if (idx < 0 || idx >= *c.count) { fprintf(stderr, "ERROR: slot %d is empty (count %u)\n", idx, *c.count); return 1; }
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(&sav, loc, box, idx, &v);
+    int last = *c.count - 1;
+    for (int i = idx; i < last; i++)
+    {
+        c.species[i] = c.species[i + 1];
+        memcpy(c.entries + i * c.stride, c.entries + (i + 1) * c.stride, c.stride);
+        memcpy(c.otnames + i * c.name_len, c.otnames + (i + 1) * c.name_len, c.name_len);
+        memcpy(c.nicknames + i * c.name_len, c.nicknames + (i + 1) * c.name_len, c.name_len);
+    }
+    memset(c.entries + last * c.stride, 0, c.stride);
+    memset(c.otnames + last * c.name_len, 0, c.name_len);
+    memset(c.nicknames + last * c.name_len, 0, c.name_len);
+    if (loc == BILLS_PC_LOC_PARTY && sav.save_generation_type == SAVE_GENERATION_2)
+    {
+        struct pksav_gen2_party_mail *pm = sav.save.gen2_save.pokemon_storage.p_party_mail;
+        for (int i = idx; i < last; i++) pm->party_mail[i] = pm->party_mail[i + 1];
+        memset(&pm->party_mail[last], 0, sizeof(pm->party_mail[last]));
+    }
+    *c.count = (uint8_t)last;
+    c.species[last] = 0xFF;
+    bills_pc_flush_current_box(&sav);
+    if (save_savefile_to_path(&sav, (char *)path) != error_none) { fprintf(stderr, "ERROR: write failed\n"); return 1; }
+    printf("released: #%03u %s L%u nick=%s from %s %d slot %d\n", v.dex, gen3_national_dex_name(v.dex), v.level, v.nickname, loc_s, box, idx);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "list") == 0)
@@ -455,6 +495,8 @@ int main(int argc, char **argv)
         return cmd_copy(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), argv[6], atoi(argv[7]));
     if (argc == 7 && strcmp(argv[1], "copy") == 0) /* legacy box-only form */
         return cmd_copy(argv[2], "box", atoi(argv[3]), atoi(argv[4]), argv[5], atoi(argv[6]));
+    if (argc == 6 && strcmp(argv[1], "release") == 0)
+        return cmd_release(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]));
     if (argc == 3 && strcmp(argv[1], "denick") == 0)
         return cmd_denick(argv[2]);
     if (argc == 4 && strcmp(argv[1], "evolve") == 0)
@@ -470,6 +512,7 @@ int main(int argc, char **argv)
             "  pkcli copy <src> <party|box> <box#> <idx> <dst> <dstBox#>   one-way; Gen 1, Gen 2, or Gen 1 -> Gen 2\n"
             "  pkcli evolve <save> <partyIdx>\n"
             "  pkcli elig <save>\n"
-            "  pkcli denick <save>                     reset every nickname to the species name\n");
+            "  pkcli denick <save>                     reset every nickname to the species name\n"
+            "  pkcli release <save> <party|box> <box#> <idx>   remove a mon, compacting the slots after it\n");
     return 2;
 }
