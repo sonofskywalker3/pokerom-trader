@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdbool.h>
 #include "pksavfilehelper.h"
 
 /**
@@ -6,6 +8,48 @@
  * @param save_generation_type a pointer to a SaveGenerationType to store the save generation type
  * @return an enum pksav_error
  */
+/* Count how many Gen 1 / Gen 2 structural invariants hold for a 32 KB save:
+ * party count <= 6 with an 0xFF species-list terminator, current box count
+ * within capacity with its terminator, and a 0x50-terminated player name.
+ * Used only to break a tie when both generations' checksums validate. */
+static int gen12_structure_score(const char *path, int gen)
+{
+    uint8_t buf[0x8000];
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    size_t n = fread(buf, 1, sizeof(buf), f);
+    fclose(f);
+    if (n < sizeof(buf)) return 0;
+    int score = 0;
+    if (gen == 1)
+    {
+        uint8_t pc = buf[0x2F2C];
+        if (pc <= 6 && buf[0x2F2D + pc] == 0xFF) score += 2;
+        uint8_t bc = buf[0x30C0];
+        if (bc <= 20 && buf[0x30C1 + bc] == 0xFF) score += 2;
+        for (int i = 0; i < 11; i++) if (buf[0x2598 + i] == 0x50) { score += 1; break; }
+    }
+    else
+    {
+        // Crystal party at 0x2865, Gold/Silver at 0x288A; current box at 0x2D10 / 0x2D6C
+        static const size_t party[2] = { 0x2865, 0x288A };
+        static const size_t box[2]   = { 0x2D10, 0x2D6C };
+        int best = 0;
+        for (int v = 0; v < 2; v++)
+        {
+            int sc = 0;
+            uint8_t pc = buf[party[v]];
+            if (pc <= 6 && buf[party[v] + 1 + pc] == 0xFF) sc += 2;
+            uint8_t bc = buf[box[v]];
+            if (bc <= 20 && buf[box[v] + 1 + bc] == 0xFF) sc += 2;
+            if (sc > best) best = sc;
+        }
+        score += best;
+        for (int i = 0; i < 11; i++) if (buf[0x200B + i] == 0x50) { score += 1; break; }
+    }
+    return score;
+}
+
 enum pksav_error detect_savefile_generation(const char *path, SaveGenerationType *save_generation_type)
 {
     enum pksav_error err = PKSAV_ERROR_NONE;
@@ -23,13 +67,6 @@ enum pksav_error detect_savefile_generation(const char *path, SaveGenerationType
         return err;
     }
 
-    err = pksav_gen1_get_file_save_type(path, &gen1_save_type);
-    if (gen1_save_type != PKSAV_GEN1_SAVE_TYPE_NONE)
-    {
-        *save_generation_type = SAVE_GENERATION_1;
-        return err;
-    }
-
     // Check Gen 3 (GBA) before Gen 2. The GBA format has a strong, specific
     // signature (0x08012025 section footer + matching security key), whereas
     // Gen 2's detection is a weaker checksum heuristic that can false-positive
@@ -41,10 +78,33 @@ enum pksav_error detect_savefile_generation(const char *path, SaveGenerationType
         return err;
     }
 
+    // Gen 1 vs Gen 2 can't be told apart by checksum alone:
+    //  - Gen 1's signature is one 8-bit checksum over 0x2598-0x3522, a region
+    //    that in a Gen 2 save holds the live current box, so any edit there
+    //    gives a Gen 2 save a 1-in-256 chance of passing the Gen 1 test.
+    //  - pksav's Crystal test accepts EITHER of two 16-bit checksums, and the
+    //    second covers a region that is all zeros in many Gen 1 saves (zero
+    //    sums to zero), so those pass the Gen 2 test.
+    // Both have happened. So when both signatures match, break the tie by
+    // checking which generation's party/box structures are well-formed.
+    err = pksav_gen1_get_file_save_type(path, &gen1_save_type);
     pksav_gen2_get_file_save_type(path, &gen2_save_type);
-    if (gen2_save_type != PKSAV_GEN2_SAVE_TYPE_NONE)
+    bool g1 = gen1_save_type != PKSAV_GEN1_SAVE_TYPE_NONE;
+    bool g2 = gen2_save_type != PKSAV_GEN2_SAVE_TYPE_NONE;
+    if (g1 && g2)
+    {
+        int s1 = gen12_structure_score(path, 1);
+        int s2 = gen12_structure_score(path, 2);
+        if (s2 > s1) g1 = false; else g2 = false;
+    }
+    if (g2)
     {
         *save_generation_type = SAVE_GENERATION_2;
+        return err;
+    }
+    if (g1)
+    {
+        *save_generation_type = SAVE_GENERATION_1;
         return err;
     }
 
