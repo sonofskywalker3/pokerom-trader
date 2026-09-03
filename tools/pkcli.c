@@ -8,7 +8,7 @@
  *   pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>   same-gen party swap + dex update
  *   pkcli evolve <save> <partyIdx>                        trade-evolve a party mon in place
  *   pkcli copy  <src> <party|box> <box#> <idx> <dst> <dstBox#>
- *                                                         one-way copy into dst box (Gen 1/Gen 2, same gen)
+ *                                                         one-way copy into dst box (Gen 1/Gen 2 same gen, or Gen 1 -> Gen 2 Time Capsule style)
  *
  * Mirrors the TradeScreen flow exactly: swap -> update_seen_owned_pkmn on both
  * sides -> save_savefile_to_path. File backups are the caller's job.
@@ -266,6 +266,29 @@ static int copy_cont_init(PokemonSave *sav, enum bills_pc_location loc, int box,
     return 0;
 }
 
+/* Gen 1 -> Gen 2 conversion, mirroring swap_pkmn_at_index_between_saves_cross_gen
+ * (the app's Time Capsule trade): species remapped to national dex, held item
+ * derived from the Gen 1 catch-rate byte exactly like the real Time Capsule,
+ * friendship base, no Pokerus, unknown caught data. */
+static void convert_gen1_pc_to_gen2(const struct pksav_gen1_pc_pokemon *g1, uint8_t level, struct pksav_gen2_pc_pokemon *g2)
+{
+    memset(g2, 0, sizeof(*g2));
+    g2->species = species_gen1_to_gen2[g1->species];
+    uint8_t item_override = trade_catch_rate_to_item[g1->catch_rate];
+    g2->held_item = item_override ? item_override : g1->catch_rate;
+    memcpy(g2->moves, g1->moves, sizeof(g2->moves));
+    g2->ot_id = g1->ot_id;
+    memcpy(g2->exp, g1->exp, sizeof(g2->exp));
+    g2->ev_hp = g1->ev_hp; g2->ev_atk = g1->ev_atk; g2->ev_def = g1->ev_def;
+    g2->ev_spd = g1->ev_spd; g2->ev_spcl = g1->ev_spcl;
+    g2->iv_data = g1->iv_data;
+    memcpy(g2->move_pps, g1->move_pps, sizeof(g2->move_pps));
+    g2->friendship = GEN2_FRIENDSHIP_BASE;
+    g2->pokerus = 0;
+    g2->caught_data = 0;
+    g2->level = level;
+}
+
 static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx, const char *dst_path, int dbox)
 {
     PokemonSave s, d;
@@ -276,10 +299,12 @@ static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx
         return 1;
     }
     if (!load_or_die(src_path, &s) || !load_or_die(dst_path, &d)) return 1;
-    if ((s.save_generation_type != SAVE_GENERATION_1 && s.save_generation_type != SAVE_GENERATION_2) ||
-        d.save_generation_type != s.save_generation_type)
+    bool cross = (s.save_generation_type == SAVE_GENERATION_1 && d.save_generation_type == SAVE_GENERATION_2);
+    if (!cross &&
+        ((s.save_generation_type != SAVE_GENERATION_1 && s.save_generation_type != SAVE_GENERATION_2) ||
+         d.save_generation_type != s.save_generation_type))
     {
-        fprintf(stderr, "ERROR: copy supports two Gen 1 saves or two Gen 2 saves only\n");
+        fprintf(stderr, "ERROR: copy supports Gen 1 -> Gen 1, Gen 2 -> Gen 2, or Gen 1 -> Gen 2 only\n");
         return 1;
     }
     bills_pc_normalize_current_box(&s);
@@ -301,8 +326,29 @@ static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx
         return 1;
     }
     uint8_t n = *dc.count;
-    dc.species[n] = sc.species[sidx];
-    memcpy(dc.entries + n * dc.stride, sc.entries + sidx * sc.stride, dc.pc_size);
+    /* A Gen 1 party mon's real level lives in party_data; the pc "box level"
+     * byte can be stale or zero until the game deposits it. */
+    uint8_t g1_level = 0;
+    if (s.save_generation_type == SAVE_GENERATION_1)
+    {
+        const struct pksav_gen1_pc_pokemon *spc = (const struct pksav_gen1_pc_pokemon *)(sc.entries + sidx * sc.stride);
+        g1_level = (sloc == BILLS_PC_LOC_PARTY)
+            ? s.save.gen1_save.pokemon_storage.p_party->party[sidx].party_data.level
+            : spc->level;
+    }
+    if (cross)
+    {
+        const struct pksav_gen1_pc_pokemon *spc = (const struct pksav_gen1_pc_pokemon *)(sc.entries + sidx * sc.stride);
+        convert_gen1_pc_to_gen2(spc, g1_level, (struct pksav_gen2_pc_pokemon *)(dc.entries + n * dc.stride));
+        dc.species[n] = species_gen1_to_gen2[sc.species[sidx]];
+    }
+    else
+    {
+        dc.species[n] = sc.species[sidx];
+        memcpy(dc.entries + n * dc.stride, sc.entries + sidx * sc.stride, dc.pc_size);
+        if (s.save_generation_type == SAVE_GENERATION_1)
+            ((struct pksav_gen1_pc_pokemon *)(dc.entries + n * dc.stride))->level = g1_level;
+    }
     memcpy(dc.otnames + n * dc.name_len, sc.otnames + sidx * sc.name_len, dc.name_len);
     memcpy(dc.nicknames + n * dc.name_len, sc.nicknames + sidx * sc.name_len, dc.name_len);
     *dc.count = (uint8_t)(n + 1);
@@ -345,7 +391,7 @@ int main(int argc, char **argv)
             "  pkcli dex <save>\n"
             "  pkcli move <save> <party|box> <box#> <idx> <party|box> <box#> <idx>\n"
             "  pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>\n"
-            "  pkcli copy <src> <party|box> <box#> <idx> <dst> <dstBox#>   one-way, Gen 1 or Gen 2\n"
+            "  pkcli copy <src> <party|box> <box#> <idx> <dst> <dstBox#>   one-way; Gen 1, Gen 2, or Gen 1 -> Gen 2\n"
             "  pkcli evolve <save> <partyIdx>\n"
             "  pkcli elig <save>\n");
     return 2;
