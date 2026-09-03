@@ -6,6 +6,9 @@
  *   pkcli dex   <save>                                    dex counts + owned/seen lists
  *   pkcli move  <save> <party|box> <box#> <idx> <party|box> <box#> <idx>
  *   pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>   same-gen party swap + dex update
+ *   pkcli evolve <save> <partyIdx>                        trade-evolve a party mon in place
+ *   pkcli copy  <src> <party|box> <box#> <idx> <dst> <dstBox#>
+ *                                                         one-way copy into dst box (Gen 1/Gen 2, same gen)
  *
  * Mirrors the TradeScreen flow exactly: swap -> update_seen_owned_pkmn on both
  * sides -> save_savefile_to_path. File backups are the caller's job.
@@ -172,6 +175,152 @@ static int cmd_trade(const char *p1, int i1, const char *p2, int i2)
     return 0;
 }
 
+static int cmd_evolve(const char *path, int idx)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(&sav, BILLS_PC_LOC_PARTY, 0, idx, &v);
+    if (!v.occupied) { fprintf(stderr, "ERROR: empty party slot %d\n", idx); return 1; }
+    bool ok = false;
+    if (sav.save_generation_type == SAVE_GENERATION_1) ok = check_trade_evolution_gen1(&sav, (uint8_t)idx);
+    else if (sav.save_generation_type == SAVE_GENERATION_2) ok = check_trade_evolution_gen2(&sav, (uint8_t)idx);
+    else if (sav.save_generation_type == SAVE_GENERATION_3) ok = check_trade_evolution_gen3(&sav, (uint8_t)idx) == E_EVO_STATUS_ELIGIBLE;
+    if (!ok) { fprintf(stderr, "ERROR: slot %d (#%03u %s) is not trade-evolution eligible\n", idx, v.dex, gen3_national_dex_name(v.dex)); return 1; }
+    /* Mirrors EvolveScreen: evolve -> update stats -> dex -> save */
+    evolve_party_pokemon_at_index(&sav, (uint8_t)idx);
+    update_pkmn_stats(&sav, (uint8_t)idx);
+    update_seen_owned_pkmn(&sav, (uint8_t)idx);
+    if (save_savefile_to_path(&sav, (char *)path) != error_none) { fprintf(stderr, "ERROR: write failed\n"); return 1; }
+    struct bills_pc_entry_view v2;
+    bills_pc_get_view(&sav, BILLS_PC_LOC_PARTY, 0, idx, &v2);
+    printf("evolved: #%03u %s -> #%03u %s (L%u)\n", v.dex, gen3_national_dex_name(v.dex), v2.dex, gen3_national_dex_name(v2.dex), v2.level);
+    return 0;
+}
+
+/* One-way copy of a party or boxed mon between two same-generation Gen 1 or
+ * Gen 2 saves: the source file is never written. Appends into dst box, then
+ * pokedex_reconcile + flush. Only the PC portion of a party mon is copied;
+ * the game rebuilds party stats when it is withdrawn. */
+struct copy_cont
+{
+    uint8_t *count;
+    uint8_t *species;     /* [capacity + 1], 0xFF-terminated */
+    uint8_t *entries;     /* first pc_pokemon; party entries are strided */
+    size_t pc_size;
+    size_t stride;
+    uint8_t *otnames;
+    uint8_t *nicknames;
+    size_t name_len;      /* bytes per otname/nickname slot (same for both) */
+    int capacity;
+};
+
+static int copy_cont_init(PokemonSave *sav, enum bills_pc_location loc, int box, struct copy_cont *c)
+{
+    if (sav->save_generation_type == SAVE_GENERATION_1)
+    {
+        c->pc_size = sizeof(struct pksav_gen1_pc_pokemon);
+        c->name_len = PKSAV_GEN1_POKEMON_OTNAME_STORAGE_LENGTH + 1;
+        if (loc == BILLS_PC_LOC_PARTY)
+        {
+            struct pksav_gen1_pokemon_party *p = sav->save.gen1_save.pokemon_storage.p_party;
+            c->count = &p->count; c->species = p->species;
+            c->entries = (uint8_t *)p->party; c->stride = sizeof(p->party[0]);
+            c->otnames = &p->otnames[0][0]; c->nicknames = &p->nicknames[0][0];
+            c->capacity = PKSAV_GEN1_PARTY_NUM_POKEMON;
+        }
+        else
+        {
+            if (box < 0 || box >= PKSAV_GEN1_NUM_POKEMON_BOXES) return 0;
+            struct pksav_gen1_pokemon_box *b = sav->save.gen1_save.pokemon_storage.pp_boxes[box];
+            c->count = &b->count; c->species = b->species;
+            c->entries = (uint8_t *)b->entries; c->stride = sizeof(b->entries[0]);
+            c->otnames = &b->otnames[0][0]; c->nicknames = &b->nicknames[0][0];
+            c->capacity = PKSAV_GEN1_BOX_NUM_POKEMON;
+        }
+        return 1;
+    }
+    if (sav->save_generation_type == SAVE_GENERATION_2)
+    {
+        c->pc_size = sizeof(struct pksav_gen2_pc_pokemon);
+        c->name_len = PKSAV_GEN2_POKEMON_OTNAME_STORAGE_LENGTH + 1;
+        if (loc == BILLS_PC_LOC_PARTY)
+        {
+            struct pksav_gen2_pokemon_party *p = sav->save.gen2_save.pokemon_storage.p_party;
+            c->count = &p->count; c->species = p->species;
+            c->entries = (uint8_t *)p->party; c->stride = sizeof(p->party[0]);
+            c->otnames = &p->otnames[0][0]; c->nicknames = &p->nicknames[0][0];
+            c->capacity = PKSAV_GEN2_PARTY_NUM_POKEMON;
+        }
+        else
+        {
+            if (box < 0 || box >= PKSAV_GEN2_NUM_POKEMON_BOXES) return 0;
+            struct pksav_gen2_pokemon_box *b = sav->save.gen2_save.pokemon_storage.pp_boxes[box];
+            c->count = &b->count; c->species = b->species;
+            c->entries = (uint8_t *)b->entries; c->stride = sizeof(b->entries[0]);
+            c->otnames = &b->otnames[0][0]; c->nicknames = &b->nicknames[0][0];
+            c->capacity = PKSAV_GEN2_BOX_NUM_POKEMON;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx, const char *dst_path, int dbox)
+{
+    PokemonSave s, d;
+    enum bills_pc_location sloc;
+    if (!parse_loc(sloc_s, &sloc))
+    {
+        fprintf(stderr, "ERROR: source location must be 'party' or 'box'\n");
+        return 1;
+    }
+    if (!load_or_die(src_path, &s) || !load_or_die(dst_path, &d)) return 1;
+    if ((s.save_generation_type != SAVE_GENERATION_1 && s.save_generation_type != SAVE_GENERATION_2) ||
+        d.save_generation_type != s.save_generation_type)
+    {
+        fprintf(stderr, "ERROR: copy supports two Gen 1 saves or two Gen 2 saves only\n");
+        return 1;
+    }
+    bills_pc_normalize_current_box(&s);
+    bills_pc_normalize_current_box(&d);
+    struct copy_cont sc, dc;
+    if (!copy_cont_init(&s, sloc, sbox, &sc) || !copy_cont_init(&d, BILLS_PC_LOC_BOX, dbox, &dc))
+    {
+        fprintf(stderr, "ERROR: box number out of range\n");
+        return 1;
+    }
+    if (sidx < 0 || sidx >= *sc.count)
+    {
+        fprintf(stderr, "ERROR: source %s %d slot %d is empty (count %u)\n", sloc_s, sbox, sidx, *sc.count);
+        return 1;
+    }
+    if (*dc.count >= dc.capacity)
+    {
+        fprintf(stderr, "ERROR: destination box %d is full\n", dbox);
+        return 1;
+    }
+    uint8_t n = *dc.count;
+    dc.species[n] = sc.species[sidx];
+    memcpy(dc.entries + n * dc.stride, sc.entries + sidx * sc.stride, dc.pc_size);
+    memcpy(dc.otnames + n * dc.name_len, sc.otnames + sidx * sc.name_len, dc.name_len);
+    memcpy(dc.nicknames + n * dc.name_len, sc.nicknames + sidx * sc.name_len, dc.name_len);
+    *dc.count = (uint8_t)(n + 1);
+    dc.species[*dc.count] = 0xFF;
+    pokedex_reconcile(&d);
+    bills_pc_flush_current_box(&d);
+    if (save_savefile_to_path(&d, (char *)dst_path) != error_none)
+    {
+        fprintf(stderr, "ERROR: write failed\n");
+        return 1;
+    }
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(&d, BILLS_PC_LOC_BOX, dbox, n, &v);
+    printf("copied: #%03u %s L%u nick=%s -> %s box %d slot %d\n",
+           v.dex, gen3_national_dex_name(v.dex), v.level, v.nickname, dst_path, dbox, n);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "list") == 0)
@@ -182,6 +331,12 @@ int main(int argc, char **argv)
         return cmd_elig(argv[2]);
     if (argc == 9 && strcmp(argv[1], "move") == 0)
         return cmd_move(argv[2], &argv[3]);
+    if (argc == 8 && strcmp(argv[1], "copy") == 0)
+        return cmd_copy(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), argv[6], atoi(argv[7]));
+    if (argc == 7 && strcmp(argv[1], "copy") == 0) /* legacy box-only form */
+        return cmd_copy(argv[2], "box", atoi(argv[3]), atoi(argv[4]), argv[5], atoi(argv[6]));
+    if (argc == 4 && strcmp(argv[1], "evolve") == 0)
+        return cmd_evolve(argv[2], atoi(argv[3]));
     if (argc == 6 && strcmp(argv[1], "trade") == 0)
         return cmd_trade(argv[2], atoi(argv[3]), argv[4], atoi(argv[5]));
     fprintf(stderr,
@@ -189,6 +344,9 @@ int main(int argc, char **argv)
             "  pkcli list <save>\n"
             "  pkcli dex <save>\n"
             "  pkcli move <save> <party|box> <box#> <idx> <party|box> <box#> <idx>\n"
-            "  pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>\n");
+            "  pkcli trade <save1> <partyIdx1> <save2> <partyIdx2>\n"
+            "  pkcli copy <src> <party|box> <box#> <idx> <dst> <dstBox#>   one-way, Gen 1 or Gen 2\n"
+            "  pkcli evolve <save> <partyIdx>\n"
+            "  pkcli elig <save>\n");
     return 2;
 }
