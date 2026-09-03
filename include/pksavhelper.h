@@ -45,7 +45,7 @@ enum eligible_trade_status
 #define BERRY 173
 #define GOLD_BERRY 174
 
-static const uint8_t trade_catch_rate_to_item[251] = {
+static const uint8_t trade_catch_rate_to_item[256] = {
     [25] = LEFTOVERS,
     [45] = BITTER_BERRY,
     [50] = GOLD_BERRY,
@@ -56,7 +56,8 @@ static const uint8_t trade_catch_rate_to_item[251] = {
     [190] = BERRY,
     [195] = BERRY,
     [220] = BERRY,
-    [250] = BERRY};
+    [250] = BERRY,
+    [255] = BERRY};
 
 // Pokémon Evolution Pair Lookup Table
 static const struct pkmn_evolution_pair_data pkmn_evolution_pairs_gen1[SI_HAUNTER + 1] = {
