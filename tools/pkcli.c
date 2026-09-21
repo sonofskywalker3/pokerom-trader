@@ -9,6 +9,7 @@
  *   pkcli evolve <save> <partyIdx>                        trade-evolve a party mon in place
  *   pkcli release <save> <party|box> <box#> <idx>        remove a mon, compact the container
  *   pkcli denick <save>                                   reset all nicknames to species names (Gen 1/2)
+ *   pkcli event  <save> [idx]                             list this game's events, or grant one's ticket item
  *   pkcli copy  <src> <party|box> <box#> <idx> <dst> <dstBox#>
  *                                                         one-way copy into dst box (Gen 1/Gen 2 same gen, or Gen 1 -> Gen 2 Time Capsule style)
  *
@@ -18,6 +19,7 @@
 #include "pksavhelper.h"
 #include "pksavfilehelper.h"
 #include "gen3_species.h"
+#include "events.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -294,6 +296,44 @@ static void convert_gen1_pc_to_gen2(const struct pksav_gen1_pc_pokemon *g1, uint
     g2->level = level;
 }
 
+/* List the distribution events this save's game supports, or grant one's
+ * ticket item (and any event flags the row carries). Mirrors EventsScreen. */
+static int cmd_event(const char *path, int idx)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    const struct pkmn_event *evs[8];
+    int n = events_available(&sav, evs, (int)(sizeof(evs) / sizeof(evs[0])));
+    if (n == 0)
+    {
+        fprintf(stderr, "ERROR: no events available for this save's game\n");
+        return 1;
+    }
+    if (idx < 0)
+    {
+        for (int i = 0; i < n; i++)
+            printf("%d: %s -> %s (%s)\n", i, evs[i]->ticket, evs[i]->pokemon, evs[i]->location);
+        return 0;
+    }
+    if (idx >= n)
+    {
+        fprintf(stderr, "ERROR: event %d out of range (%d available)\n", idx, n);
+        return 1;
+    }
+    if (apply_event(&sav, evs[idx]) != error_none)
+    {
+        fprintf(stderr, "ERROR: could not apply event (pocket full or wrong game)\n");
+        return 1;
+    }
+    if (save_savefile_to_path(&sav, (char *)path) != error_none)
+    {
+        fprintf(stderr, "ERROR: write failed\n");
+        return 1;
+    }
+    printf("granted: %s -> %s (%s)\n", evs[idx]->ticket, evs[idx]->pokemon, evs[idx]->location);
+    return 0;
+}
+
 static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx, const char *dst_path, int dbox)
 {
     PokemonSave s, d;
@@ -499,6 +539,8 @@ int main(int argc, char **argv)
         return cmd_release(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]));
     if (argc == 3 && strcmp(argv[1], "denick") == 0)
         return cmd_denick(argv[2]);
+    if ((argc == 3 || argc == 4) && strcmp(argv[1], "event") == 0)
+        return cmd_event(argv[2], argc == 4 ? atoi(argv[3]) : -1);
     if (argc == 4 && strcmp(argv[1], "evolve") == 0)
         return cmd_evolve(argv[2], atoi(argv[3]));
     if (argc == 6 && strcmp(argv[1], "trade") == 0)
@@ -513,6 +555,7 @@ int main(int argc, char **argv)
             "  pkcli evolve <save> <partyIdx>\n"
             "  pkcli elig <save>\n"
             "  pkcli denick <save>                     reset every nickname to the species name\n"
+            "  pkcli event <save> [idx]                list this game's events, or grant one's ticket\n"
             "  pkcli release <save> <party|box> <box#> <idx>   remove a mon, compacting the slots after it\n");
     return 2;
 }
