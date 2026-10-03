@@ -49,10 +49,22 @@ Notes:
 
 ## Gen 2 (Crystal) — GS Ball → Celebi
 
-TODO (Gen 2 phase): source the event flag from `pret/pokecrystal`. The GS Ball
-event (give to Kurt → Ilex Forest shrine) is gated by an event flag plus story
-progress; the flag id + Crystal SRAM event-flags offset go here once confirmed
-by save-diff against the repo's Crystal saves.
+Crystal `wEventFlags` is at SRAM **0x2600** (2048 flags = 0x100 bytes, ending at
+wCurBox 0x2700). PKSav originally used 0x269C (it assumed 800 flags); fixed
+2026-10-03 and confirmed against a real save (EVENT_GOT_HM01_CUT,
+EVENT_CLEARED_SLOWPOKE_WELL and the EVENT_BEAT_* gym-leader bits all matched).
+
+The Goldenrod Pokémon Center gift sets these, and `apply_event` mirrors it:
+
+| Flag | id |
+|------|----|
+| `EVENT_CAN_GIVE_GS_BALL_TO_KURT` | 190 |
+| `EVENT_GOT_GS_BALL_FROM_GOLDENROD_POKEMON_CENTER` | 832 |
+
+The rest is in-game: Kurt takes the ball (EVENT_GAVE_GS_BALL_TO_KURT 191 plus the
+daily ENGINE_KURT_MAKING_BALLS flag). The next day he hands it back and sets
+EVENT_FOREST_IS_RESTLESS (192), and the Ilex shrine then needs that flag plus the
+GS Ball in the bag.
 
 ## Verification status
 
@@ -74,7 +86,7 @@ by save-diff against the repo's Crystal saves.
 | Mystic / Emerald | ✓ | ✓ 0x8E0 clear→SET |
 | Aurora / Emerald | ✓ | ✓ 0x8D5 clear→SET |
 | Eon / RS, Mystic+Aurora / FRLG | ✓ (same code path, decomp flags) | pending RS/FRLG ROM |
-| GS Ball / Crystal | item only (flag deferred) | pending Crystal ROM |
+| GS Ball / Crystal | ✓ item + flags 190/832 | pending (Babs' Crystal, 2026-10-03) |
 
 Emerald is fully verified in the game engine. FRLG/RS use the identical
 `apply_event` → flag-API path with decomp-sourced flag ids, so they are verified

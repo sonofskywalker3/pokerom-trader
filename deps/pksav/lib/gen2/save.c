@@ -481,6 +481,10 @@ enum pksav_error pksav_gen2_save_get_event_flag(
     {
         return PKSAV_ERROR_INVALID_SAVE;
     }
+    if(flag_id >= PKSAV_GEN2_CRYSTAL_NUM_EVENT_FLAGS)
+    {
+        return PKSAV_ERROR_PARAM_OUT_OF_RANGE;
+    }
 
     const struct pksav_gen2_save_internal* p_internal = p_gen2_save->p_internal;
     const uint8_t* p_flags = p_internal->p_raw_save + PKSAV_GEN2_CRYSTAL_EVENT_FLAGS_OFFSET;
@@ -501,6 +505,10 @@ enum pksav_error pksav_gen2_save_set_event_flag(
     if(p_gen2_save->save_type != PKSAV_GEN2_SAVE_TYPE_CRYSTAL)
     {
         return PKSAV_ERROR_INVALID_SAVE;
+    }
+    if(flag_id >= PKSAV_GEN2_CRYSTAL_NUM_EVENT_FLAGS)
+    {
+        return PKSAV_ERROR_PARAM_OUT_OF_RANGE;
     }
 
     struct pksav_gen2_save_internal* p_internal = p_gen2_save->p_internal;
