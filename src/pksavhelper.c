@@ -239,12 +239,19 @@ enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save
     struct pkmn_evolution_pair_data evo_pair = pkmn_evolution_pairs_gen2[species];
 
     // If the pkmn species has an initialized evolution pair
-    if (species == evo_pair.species_index)
+    if (species != evo_pair.species_index)
     {
-        return E_EVO_STATUS_ELIGIBLE;
+        return E_EVO_STATUS_NOT_ELIGIBLE;
     }
 
-    return E_EVO_STATUS_NOT_ELIGIBLE;
+    // Item evolutions (Metal Coat, King's Rock, ...) need the item held, as in a vanilla trade
+    uint8_t held_item = pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.held_item;
+    if (evo_pair.evolution_item != 0 && held_item != evo_pair.evolution_item)
+    {
+        return E_EVO_STATUS_MISSING_ITEM;
+    }
+
+    return E_EVO_STATUS_ELIGIBLE;
 }
 
 // --- Gen 3 trade evolutions ---
@@ -1085,6 +1092,12 @@ void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_in
         // Update species index to evolution index to access evolution base stats
         pkmn_save->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index] = evolution_index;
         pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.species = evolution_index;
+
+        // Item evolutions consume the held item, as in a vanilla trade
+        if (pkmn_evolution_pairs_gen2[pkmn_species_index].evolution_item != 0)
+        {
+            pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.held_item = 0;
+        }
 
         // Get the pokemon's nickname
         char pkmn_save_nickname[PKMN_NAME_TEXT_MAX + 1] = "\0";

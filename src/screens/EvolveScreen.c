@@ -130,7 +130,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
         {
             evolve_eligible = check_trade_evolution_gen2(pkmn_save, i);
             pksav_gen2_import_text(pkmn_save->save.gen2_save.pokemon_storage.p_party->nicknames[i], pokemon_nickname, PKMN_NAME_TEXT_MAX);
-            draw_pkmn_button((Rectangle){TRAINER_NAME_X, TRAINER_NAME_Y + 75 + (i * 30), MeasureText(pokemon_nickname, 20) + 10, 30}, i, pokemon_nickname, selected_index == i || evolve_eligible == E_EVO_STATUS_NOT_ELIGIBLE);
+            draw_pkmn_button((Rectangle){TRAINER_NAME_X, TRAINER_NAME_Y + 75 + (i * 30), MeasureText(pokemon_nickname, 20) + 10, 30}, i, pokemon_nickname, selected_index == i || evolve_eligible != E_EVO_STATUS_ELIGIBLE);
         }
         else if (save_generation_type == SAVE_GENERATION_3)
         {
@@ -153,7 +153,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
                 if (save_generation_type == SAVE_GENERATION_1)
                     is_trade_eligible = check_trade_evolution_gen1(pkmn_save, selected_index);
                 else if (save_generation_type == SAVE_GENERATION_2)
-                    is_trade_eligible = check_trade_evolution_gen2(pkmn_save, selected_index);
+                    is_trade_eligible = check_trade_evolution_gen2(pkmn_save, selected_index) == E_EVO_STATUS_ELIGIBLE;
                 else if (save_generation_type == SAVE_GENERATION_3)
                     is_trade_eligible = check_trade_evolution_gen3(pkmn_save, selected_index) == E_EVO_STATUS_ELIGIBLE;
             }
