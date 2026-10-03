@@ -191,7 +191,7 @@ static int cmd_evolve(const char *path, int idx)
     if (!v.occupied) { fprintf(stderr, "ERROR: empty party slot %d\n", idx); return 1; }
     bool ok = false;
     if (sav.save_generation_type == SAVE_GENERATION_1) ok = check_trade_evolution_gen1(&sav, (uint8_t)idx);
-    else if (sav.save_generation_type == SAVE_GENERATION_2) ok = check_trade_evolution_gen2(&sav, (uint8_t)idx);
+    else if (sav.save_generation_type == SAVE_GENERATION_2) ok = check_trade_evolution_gen2(&sav, (uint8_t)idx) == E_EVO_STATUS_ELIGIBLE;
     else if (sav.save_generation_type == SAVE_GENERATION_3) ok = check_trade_evolution_gen3(&sav, (uint8_t)idx) == E_EVO_STATUS_ELIGIBLE;
     if (!ok) { fprintf(stderr, "ERROR: slot %d (#%03u %s) is not trade-evolution eligible\n", idx, v.dex, gen3_national_dex_name(v.dex)); return 1; }
     /* Mirrors EvolveScreen: evolve -> update stats -> dex -> save */
