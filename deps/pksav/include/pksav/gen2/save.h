@@ -333,11 +333,14 @@ PKSAV_API enum pksav_error pksav_gen2_pokemon_storage_set_current_box(
 
 /*
  * File offset of the event-flag bit array (wEventFlags) in a Crystal save.
- * NUM_EVENTS = 800 -> 100 (0x64) bytes; it sits immediately before wCurBox,
- * which PKSav maps to file offset 0x2700, so 0x2700 - 0x64 = 0x269C.
- * Sourced from pret/pokecrystal. Crystal only.
+ * NUM_EVENTS = 2048 -> 256 (0x100) bytes; it sits immediately before wCurBox,
+ * which PKSav maps to file offset 0x2700, so 0x2700 - 0x100 = 0x2600.
+ * Sourced from pret/pokecrystal and confirmed against a real Crystal save
+ * (EVENT_GOT_HM01_CUT, EVENT_CLEARED_SLOWPOKE_WELL, EVENT_BEAT_* gym bits).
+ * Crystal only.
  */
-#define PKSAV_GEN2_CRYSTAL_EVENT_FLAGS_OFFSET (0x269C)
+#define PKSAV_GEN2_CRYSTAL_EVENT_FLAGS_OFFSET (0x2600)
+#define PKSAV_GEN2_CRYSTAL_NUM_EVENT_FLAGS (2048)
 
 /*!
  * @brief Read a Crystal in-game event flag (bit index into wEventFlags).

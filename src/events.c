@@ -24,14 +24,19 @@
 #define FLAG_FRLG_AURORA       0x84B // FLAG_ENABLE_SHIP_BIRTH_ISLAND (FRLG)
 #define FLAG_E_OLD_SEA_MAP     0x8D6 // FLAG_ENABLE_SHIP_FARAWAY_ISLAND (Emerald)
 
+// Crystal event flags (bit index into wEventFlags; pret/pokecrystal EVENT_*).
+// These are what the Goldenrod Pokemon Center GS Ball gift sets; Kurt's script
+// then takes over (keeps the ball a day, sets EVENT_FOREST_IS_RESTLESS).
+#define FLAG_C_CAN_GIVE_GS_BALL_TO_KURT 190 // EVENT_CAN_GIVE_GS_BALL_TO_KURT
+#define FLAG_C_GOT_GS_BALL              832 // EVENT_GOT_GS_BALL_FROM_GOLDENROD_POKEMON_CENTER
+
 static const struct pkmn_event EVENTS[] = {
     // --- Gen 2 (Crystal only) ---
-    // GS Ball flag deferred: the Ilex-shrine trigger is story-gated and unverified
-    // without a Crystal ROM, so we grant the item only for now (flag_ids all 0).
+    // GS Ball: mirrors the Goldenrod Pokemon Center gift (item + both flags).
     {SAVE_GENERATION_2, (uint8_t)(1u << PKSAV_GEN2_SAVE_TYPE_CRYSTAL), ITEM_GS_BALL,
-     {0, 0, 0},
+     {FLAG_C_CAN_GIVE_GS_BALL_TO_KURT, FLAG_C_GOT_GS_BALL, 0},
      "GS Ball", "Celebi",
-     "Give the GS Ball to Kurt in Azalea Town, then use it at the Ilex Forest shrine."},
+     "Give the GS Ball to Kurt in Azalea Town, return the next day, then visit the Ilex Forest shrine."},
 
     // --- Gen 3: Eon Ticket (Latias / Latios) ---
     {SAVE_GENERATION_3, (uint8_t)(1u << PKSAV_GBA_SAVE_TYPE_RS), ITEM_EON_TICKET,
