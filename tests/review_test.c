@@ -109,6 +109,15 @@ static int test_same_file_refused(void)
     CHECK(save_two_savefiles(&s1, (char *)a, &s2, (char *)a) == error_save_same_file, "same path refused");
     CHECK(save_two_savefiles(&s1, (char *)a, &s2, (char *)"tests/../tests/_tmp_rv_same.sav") == error_save_same_file, "same file, different spelling refused");
     CHECK(save_two_savefiles(&s1, (char *)a, &s2, (char *)"TESTS\\_TMP_RV_SAME.SAV") == error_save_same_file, "same file, different case and slash refused");
+    /* A save named like the other's side file: committing one would delete it. */
+    const char *side = "tests/_tmp_rv_same.sav.old";
+    CHECK(copy_file(FIRERED, side), "copy side-named save");
+    PokemonSave s3;
+    load_savefile_from_path(side, &s3);
+    CHECK(save_two_savefiles(&s1, (char *)a, &s3, (char *)side) == error_save_same_file, "save named <other>.old refused");
+    CHECK(exists(side), "side-named save still there");
+    free_save(&s3);
+    remove(side);
     CHECK(same_file(a, orig, n), "file untouched");
     CHECK(!exists("tests/_tmp_rv_same.sav.tmp") && !exists("tests/_tmp_rv_same.sav.old"), "no side files");
     free_save(&s1);
@@ -169,9 +178,19 @@ static int test_leftover_old_is_kept(void)
     CHECK(save_savefile_to_path(&s, (char *)a) == error_none, "save");
     CHECK(same_file(kept, marker, sizeof(marker)), "leftover .old kept as .interrupted");
     CHECK(!exists(old), "no .old after a clean save");
+
+    /* A second interruption must not overwrite the first kept copy. */
+    const char *kept2 = "tests/_tmp_rv_old.sav.interrupted2";
+    remove(kept2);
+    const uint8_t marker2[] = "second crash";
+    CHECK(spit(old, marker2, sizeof(marker2)), "plant second leftover .old");
+    CHECK(save_savefile_to_path(&s, (char *)a) == error_none, "save again");
+    CHECK(same_file(kept, marker, sizeof(marker)) && same_file(kept2, marker2, sizeof(marker2)),
+          "both interrupted copies kept");
     free_save(&s);
     remove(a);
     remove(kept);
+    remove(kept2);
     printf("leftover_old_is_kept PASS\n");
     return 0;
 }
@@ -185,12 +204,13 @@ static void wr32le(uint8_t *p, uint32_t v)
 
 /* Footer of a DP block: counter @-0x14, size @-0xC, magic @-0x8, CRC @-0x2
  * over everything but the last 0x14 bytes. */
-static void dp_block(uint8_t *buf, uint32_t base, uint32_t size, uint32_t counter, int good_crc)
+static void dp_block(uint8_t *buf, uint32_t base, uint32_t size, uint32_t counter, int good_crc, uint8_t block_id)
 {
     uint8_t *end = buf + base + size;
     wr32le(end - 0x14, counter);
     wr32le(end - 0x0C, size);
     wr32le(end - 0x08, 0x20060623u);
+    end[-4] = block_id; /* 0 general, 1 storage */
     uint16_t crc = gen4_crc16_ccitt(buf + base, size - 0x14);
     if (!good_crc) crc ^= 0x5555;
     end[-2] = (uint8_t)crc;
@@ -204,8 +224,8 @@ static uint8_t *synthetic_dp(int newer_general_ok, int newer_storage_ok)
     {
         uint32_t part = (uint32_t)p * GEN4_PARTITION_SIZE;
         buf[part + 0x10] = (uint8_t)(0xA0 + p); /* make the two copies differ */
-        dp_block(buf, part, 0xC100, (uint32_t)(1 + p), p == 0 || newer_general_ok);
-        dp_block(buf, part + 0xC100, 0x121E0, (uint32_t)(1 + p), p == 0 || newer_storage_ok);
+        dp_block(buf, part, 0xC100, (uint32_t)(1 + p), p == 0 || newer_general_ok, 0);
+        dp_block(buf, part + 0xC100, 0x121E0, (uint32_t)(1 + p), p == 0 || newer_storage_ok, 1);
     }
     return buf;
 }
@@ -227,6 +247,22 @@ static int test_gen4_corrupt_newer_block(void)
     CHECK(spit(p, buf, GEN4_SAVE_SIZE), "write synthetic DP");
     CHECK(gen4_load_save_from_file(p, &g) == PKSAV_ERROR_NONE, "load synthetic DP");
     CHECK(g.general_base == 0 && g.storage_base == 0xC100, "newer copy with a bad CRC loses to the intact one");
+    gen4_free_save(&g);
+    free(buf);
+
+    /* The block id (end - 4) is checked too: a newer storage copy claiming to
+     * be block 0 loses to the older intact one. */
+    buf = synthetic_dp(1, 1);
+    {
+        uint8_t *end = buf + GEN4_PARTITION_SIZE + 0xC100 + 0x121E0;
+        end[-4] = 0;
+        uint16_t crc = gen4_crc16_ccitt(buf + GEN4_PARTITION_SIZE + 0xC100, 0x121E0 - 0x14);
+        end[-2] = (uint8_t)crc;
+        end[-1] = (uint8_t)(crc >> 8);
+    }
+    CHECK(spit(p, buf, GEN4_SAVE_SIZE), "write synthetic DP");
+    CHECK(gen4_load_save_from_file(p, &g) == PKSAV_ERROR_NONE, "load synthetic DP");
+    CHECK(g.storage_base == 0xC100 && g.general_base == GEN4_PARTITION_SIZE, "wrong block id loses");
     gen4_free_save(&g);
     free(buf);
 
@@ -260,9 +296,13 @@ static int test_name_padding(void)
     uint8_t full[10];
     memset(full, 0xBB, sizeof(full)); /* "AAAAAAAAAA" */
     char out[16];
-    memset(out, 0, sizeof(out));
+    memset(out, 'Z', sizeof(out));
     CHECK(pksav_gba_import_text(full, out, 10) == PKSAV_ERROR_NONE, "import full-length");
     CHECK(strncmp(out, "AAAAAAAAAA", 10) == 0, "full-length name imported");
+    CHECK(out[10] == 'Z', "nothing written past num_chars");
+    memset(out, 'Z', sizeof(out));
+    CHECK(pksav_gba_import_text(full, out, 11) == PKSAV_ERROR_NONE && strcmp(out, "AAAAAAAAAA") == 0,
+          "with room for it, the result is NUL-terminated");
     printf("name_padding PASS\n");
     return 0;
 }
