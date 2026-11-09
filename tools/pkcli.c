@@ -388,6 +388,13 @@ static int cmd_copy(const char *src_path, const char *sloc_s, int sbox, int sidx
         fprintf(stderr, "ERROR: source %s %d slot %d is empty (count %u)\n", sloc_s, sbox, sidx, *sc.count);
         return 1;
     }
+    if (s.save_generation_type == SAVE_GENERATION_1 && d.save_generation_type == SAVE_GENERATION_2 &&
+        (sc.species[sidx] > SI_VICTREEBEL || species_gen1_to_gen2[sc.species[sidx]] == 0))
+    {
+        // Glitch / unused Gen 1 index: no Gen 2 species (and past the table).
+        fprintf(stderr, "ERROR: source species index 0x%02X has no Gen 2 equivalent\n", sc.species[sidx]);
+        return 1;
+    }
     if (*dc.count >= dc.capacity)
     {
         fprintf(stderr, "ERROR: destination box %d is full\n", dbox);
@@ -517,6 +524,9 @@ static int cmd_release(const char *path, const char *loc_s, int box, int idx)
     struct copy_cont c;
     if (!copy_cont_init(&sav, loc, box, &c)) { fprintf(stderr, "ERROR: bad box number\n"); return 1; }
     if (idx < 0 || idx >= *c.count) { fprintf(stderr, "ERROR: slot %d is empty (count %u)\n", idx, *c.count); return 1; }
+    // The games never let the party go empty (a save with no party can't be
+    // played); the app's PC screen refuses this too.
+    if (loc == BILLS_PC_LOC_PARTY && *c.count <= 1) { fprintf(stderr, "ERROR: can't release the last Pokemon in the party\n"); return 1; }
     struct bills_pc_entry_view v;
     bills_pc_get_view(&sav, loc, box, idx, &v);
     int last = *c.count - 1;
@@ -647,7 +657,15 @@ static int cmd_hold(const char *path, const char *loc_s, int box, int idx, const
     if (!parse_loc(loc_s, &loc)) { fprintf(stderr, "ERROR: location must be 'party' or 'box'\n"); return 1; }
     if (!load_or_die(path, &sav)) return 1;
     if (sav.save_generation_type != SAVE_GENERATION_2) { fprintf(stderr, "ERROR: hold supports Gen 2 saves only\n"); return 1; }
-    uint8_t item = strcmp(item_s, "none") == 0 ? 0 : (uint8_t)strtol(item_s, NULL, 0);
+    uint8_t item = 0;
+    if (strcmp(item_s, "none") != 0)
+    {
+        // A typo must not parse as 0 and silently take the item away.
+        char *end = NULL;
+        long v = strtol(item_s, &end, 0);
+        if (end == item_s || *end != 0 || v < 1 || v > 255) { fprintf(stderr, "ERROR: item must be 1-255 or 'none'\n"); return 1; }
+        item = (uint8_t)v;
+    }
     bills_pc_normalize_current_box(&sav);
     struct copy_cont c;
     if (!copy_cont_init(&sav, loc, box, &c) || idx < 0 || idx >= *c.count) { fprintf(stderr, "ERROR: empty slot\n"); return 1; }
@@ -759,6 +777,13 @@ static int cmd_transfer(const char *src_path, const char *loc_s, int box, int id
         struct bills_pc_slot from = {BILLS_PC_LOC_BOX, box, idx}, to = {BILLS_PC_LOC_PARTY, 0, n};
         if (bills_pc_move_pkmn(&s, from, to) != error_none) { fprintf(stderr, "ERROR: withdraw failed\n"); return 1; }
         party_idx = n;
+    }
+    // Validate before reading party[party_idx] directly (and before the
+    // uint8_t narrowing below, which would wrap a large index).
+    if (party_idx < 0 || party_idx >= bills_pc_container_count(&s, BILLS_PC_LOC_PARTY, 0))
+    {
+        fprintf(stderr, "ERROR: party slot %d is empty\n", party_idx);
+        return 1;
     }
     struct bills_pc_entry_view v;
     bills_pc_get_view(&s, BILLS_PC_LOC_PARTY, 0, party_idx, &v);
