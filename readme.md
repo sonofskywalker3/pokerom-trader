@@ -1,93 +1,70 @@
 # Pokerom Trader - Pokémon Save File Trading GUI
 
-> **Fork notice:** This is a fork of [savaughn/pokerom-trader](https://github.com/savaughn/pokerom-trader)
-> by Spencer Vaughn (MIT), which builds on the [PKSav](https://github.com/savaughn/pksav) library (MIT).
-> This fork adds **Generation 3 (GBA) support** and an expanded **Boxes** (Bill's PC) box-management
-> feature. All original attribution and the MIT license are retained; see [LICENSE](LICENSE) and
-> [Acknowledgments](#acknowledgments). Gen 3 base-stat / growth-rate data was compiled from
-> [Bulbapedia](https://bulbapedia.bulbagarden.net) and [Serebii](https://www.serebii.net).
+Trade Pokémon between your save files, evolve trade evolutions, manage your PC boxes and carry Pokémon forward from Red/Blue all the way to Diamond/Pearl, without a second console or a link cable. It works on the save files your emulator or cartridge dumper already gives you, and it does what the games themselves would do, so the Pokémon stay legitimate.
+
+> **About this fork:** Pokerom Trader was created by Spencer Vaughn ([savaughn/pokerom-trader](https://github.com/savaughn/pokerom-trader), MIT) on the [PKSav](https://github.com/savaughn/pksav) library (MIT). This fork continues it with Gen 3 and Gen 4 support, forward transfers, Bill's PC, a Pokédex view, events and many fixes. All original attribution and the MIT license are retained; see [LICENSE](LICENSE) and [Acknowledgments](#acknowledgments).
 
 ![main_menu](https://github.com/savaughn/pokerom-trader/assets/25937456/78ef12ba-b04c-471d-a1b2-36bc55ab731e)
 
-#
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/savaughn/pokerom-trader)](https://github.com/savaughn/pokerom-trader/releases) [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/savaughn/pokerom-trader/build-macos.yml?branch=main)](https://github.com/savaughn/pokerom-trader/actions) [![GitHub issues](https://img.shields.io/github/issues/savaughn/pokerom-trader)](https://github.com/savaughn/pokerom-trader/issues) [![GitHub](https://img.shields.io/github/license/savaughn/pokerom-trader)](https://github.com/savaughn/pokerom-trader/blob/main/LICENSE) [![GitHub all releases](https://img.shields.io/github/downloads/savaughn/pokerom-trader/total)](https://github.com/savaughn/pokerom-trader/releases)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/sonofskywalker3/pokerom-trader)](https://github.com/sonofskywalker3/pokerom-trader/releases) [![GitHub issues](https://img.shields.io/github/issues/sonofskywalker3/pokerom-trader)](https://github.com/sonofskywalker3/pokerom-trader/issues) [![GitHub](https://img.shields.io/github/license/sonofskywalker3/pokerom-trader)](https://github.com/sonofskywalker3/pokerom-trader/blob/main/LICENSE)
 
-## Overview
+## Supported games
 
-Pokerom Trader is an open-source project that simplifies the process of trading Pokémon between two save files using the [PKSav](https://github.com/savaughn/pksav) C library. This graphical user interface (GUI) provides an intuitive way for Pokémon enthusiasts to transfer Pokémon between different save files. This is not another save file editor. This replicates the in-game trading experience resulting in legal pokémon.
+| Generation | Games (US/English saves) |
+|---|---|
+| Gen 1 | Red, Blue, Yellow |
+| Gen 2 | Gold, Silver, Crystal |
+| Gen 3 | Ruby, Sapphire, Emerald, FireRed, LeafGreen |
+| Gen 4 | Diamond, Pearl, Platinum, HeartGold, SoulSilver |
 
-### Features
-- Trade - Allows a user to trade Pokémon between save files
-- Evolve - A shortcut for evolving Pokémon that only evolve through trading
-  - This replicates a trade, the evolution, and a trade back to OT
-- Boxes - Full PC box management for a single save file
-  - Browse the party and every PC box, deposit / withdraw / swap Pokémon, and reorganize between boxes
-  - Sort a box by name, level, or type
-  - Search by name, type, or level
-- Save backup - Automatically backs up save files in the same directory before writing to them
+## Features
 
-### Settings 
+- **Trade** between two saves of the same generation, or between Gen 1 and Gen 2 the way the Time Capsule does (only Pokémon and moves both games have).
+- **Evolve** Pokémon that only evolve by trading, including held-item evolutions (Metal Coat, King's Rock, Dragon Scale, Up-Grade, DeepSeaTooth/Scale). An Everstone blocks it, as in the games.
+- **Transfer forward**, one way, the way the games move Pokémon up a generation:
+  - Gen 1/2 → Gen 3: keeps the OT, level, moves, PP Ups, held item, gender, shininess and Unown letter.
+  - Gen 3 → Gen 4 (Pal Park): keeps the OT, PID, IVs, EVs, ability, ribbons, markings, met data and more, following the real Pal Park rules.
+  - The source save loses the Pokémon, so nothing is cloned.
+- **Bill's PC**: browse the party and every box, deposit, withdraw and swap, move between boxes, sort and search. It follows the games' rules: no boxing Mail holders, and never leaving the party without a Pokémon that can battle.
+- **Pokédex**: see what each save has seen and caught, with a to-do list that points to Pokémon you own but haven't registered, or could evolve or breed.
+- **Events**: re-issue the distribution items that unlock in-game events, so the cartridge itself generates the Pokémon when you play to the spot. The GS Ball (Crystal → Celebi), Eon Ticket (R/S/E → Latias/Latios), Mystic Ticket (E/FR/LG → Lugia & Ho-Oh), Aurora Ticket (E/FR/LG → Deoxys) and Old Sea Map (Emerald → Mew). It can also give Gen 3 saves the 2006 US 10th Anniversary Celebi as a real distribution would.
 
-- Change save files folder with absolute path to folder
-  - Default is ~/Library/Application Support/PokeromTrader/saves (MacOS)
-  - Default is ~/.pokeromtrader/ (Linux)
-  - Default is \<UserProfile\>\\Documents\\PokeromTrader\\saves (Windows)
+## Your saves are safe
 
-### Deep Dive
-- Stats calculation on evolution
-  - Calculated using formula from [bulbapedia](https://bulbapedia.bulbagarden.net/wiki/Stats).
-  - Based off of the Pokémon's base stats, level, DVs, and EVs all of which are read from the save file sram.
+- The first time a save is written in a session, the app copies the original file to `<save>_bak`.
+- Two-save operations (trades, transfers) are written to temporary files and committed together: if anything fails, neither save changes.
+- If an emulator wrote the file after the app loaded it, the app refuses to overwrite it and reloads instead.
+- The app rewrites everything the games verify on load (checksums for every generation, and Gen 2's backup copy of the save), so an edited save loads in-game like a normal one.
 
-## What's working
+As with any save tool, try results in an emulator before writing them to a real cartridge.
 
-- Same-gen trading  (Gen 1 <-> Gen 1, Gen 2 <-> Gen 2, **Gen 3 <-> Gen 3**)
-- Cross-gen trading (Gen 1 <-> Gen 2)
-- Trade evolutions (Gen 1, Gen 2, **Gen 3** — plain and held-item, incl. Clamperl)
-- Boxes: PC box management (Gen 1, Gen 2, **Gen 3**): deposit/withdraw/swap between party and boxes, box-to-box moves, sort (per-box or global), and search
-  - Note: mail-holding Gen 2 Pokémon can't be deposited (mail can't be stored in a box, as in the real games); type sort/search covers the 151 Kanto Pokémon; Gen 3 boxed mons show no level (Gen 3 stores none)
-- **Gen 3 (GBA) support** — Ruby / Sapphire / Emerald / FireRed / LeafGreen (US/English). Withdrawing or trading a Gen 3 mon rebuilds its stats (level from EXP, base/IV/EV/nature); OT and PID are preserved so mons stay legal.
-- **Forward transfer (Gen 1/2 → Gen 3)** — pick a Gen 1/2 save + a Gen 3 save and move a Pokémon *up* a generation. It converts the data (DV→IV, level→EXP, fabricated PID for nature/ability), keeps the OT, and removes it from the source (a true one-way transfer). Obtainability-gated: it refuses species with no legal Gen 3 home (Mew, Celebi).
-- **Events (re-issue distribution tickets)** — grants the key item that unlocks an already-in-ROM event, so the *game itself* generates a fully legitimate Pokémon when you play to the spot. GS Ball (Crystal → Celebi), Eon Ticket (R/S/E → Latias/Latios), Mystic Ticket (E/FR/LG → Lugia/Ho-Oh), Aurora Ticket (E/FR/LG → Deoxys), Old Sea Map (Emerald → Mew). *For Gen 3 it also sets the in-game event flag so the trip actually appears — verified in-emulator for all four Emerald events.*
-- **Resizable window** — the UI scales to the window; on the save-file lists a taller window shows more rows.
+## Getting started
 
-*Perfect Crystal save files seem to work.
+Download the Windows build from the [releases page](https://github.com/sonofskywalker3/pokerom-trader/releases) and run it. Put your `.sav` files in `Documents\PokeromTrader\saves`, choose another folder in Settings, or drag and drop saves onto the file list.
 
-## Controls
+| Platform | Status | Default save folder |
+|---|---|---|
+| Windows x64 | Release build | `<UserProfile>\Documents\PokeromTrader\saves` |
+| Linux, macOS | Build from source (not yet tested on this fork's latest changes) | `~/.pokeromtrader/saves`, `~/Library/Application Support/PokeromTrader/saves` |
+| Android | Planned | |
 
-- Select a save file / Pokémon: **click**
-- Scroll the save list: **mouse wheel**, **↑ / ↓ arrow keys**, or click-and-drag
-- Resize the window by dragging any edge (drag taller to see more of the list)
+### Controls
+
+- Select a save file or Pokémon: **click**
+- Scroll lists: **mouse wheel**, **↑ / ↓ arrow keys**, or click and drag
+- Resize the window by dragging any edge; a taller window shows more of the list
 - Back / exit a screen: **Esc**
 
-## What's not working
-- See [issues tab](https://github.com/savaughn/pokerom-trader/issues) for current bugs
-- No JP Region support
-- **Events (Gen 3)**: grants the ticket **and** sets the ferry-enable event flag; all four Emerald events are verified in-emulator. FireRed/LeafGreen and Ruby/Sapphire use the same mechanism with flags taken from the game decompilation but have not yet been play-tested on those specific ROMs.
-- **Events (GS Ball, Crystal)**: grants the item only; the Ilex-shrine trigger flag is story-gated and still needs Crystal-ROM confirmation, so it is not set yet.
-- No Gen 4+ (DS) support yet — so no Crystal→Platinum / SoulSilver routing
-- No Gen 3 daycare editing; no cross-gen *trade* involving Gen 3 (there is no legal one — use forward transfer instead)
-- No support for romhacks that change the save file structure (almost all of them)
+## Known limitations
 
-## Discord
-https://discord.gg/JUzzegS3AP
+- US/English saves only; Japanese saves and ROM hacks that change the save layout aren't supported.
+- **Events:** the Emerald events are verified in-emulator. FireRed/LeafGreen and Ruby/Sapphire use the same mechanism with flags from the game disassemblies but haven't been play-tested on those games yet.
+- Gen 3 and Gen 4 boxed Pokémon show no level in Bill's PC (the games don't store one).
+- Bug reports and requests: [issues](https://github.com/sonofskywalker3/pokerom-trader/issues).
 
-## Getting Started
+## Building from source
 
-| Platform          | Compatibility   | default save folder |
-|-------------------|-----------------|---------|
-| Windows           | ✅ | \<UserProfile\>\\Documents\\PokeromTrader\\saves
-| Linux amd64       | ✅ |~/.pokeromtrader/saves
-| Linux arm64       | ✅ |~/.pokeromtrader/saves
-| MacOS x86_64      | ✅  |~/Library/Application Support/PokeromTrader/saves 
-| MacOS arm64       | ✅  |~/Library/Application Support/PokeromTrader/saves 
-| iOS               | ❌  |
-| Android           | ❌  |
-
-
-Download the latest release from the [releases page](https://github.com/savaughn/pokerom-trader/releases).
-
-### MacOS
-To execute, right click PokeromTrader.app and select "Open" to bypass the MacOS security warning. This is only required the first time you open the app.
+See the [Contributing Guide](CONTRIBUTING.md). On Windows any MinGW-w64 GCC works (for example the one bundled with Strawberry Perl); run the tests with `make test` and build the command-line tool with `make pkcli`.
 
 ## Contributing
  
