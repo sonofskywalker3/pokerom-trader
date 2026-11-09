@@ -20,6 +20,30 @@
 #define USR_DATA_DIR "/.pokeromtrader"
 #endif
 
+// The user's home folder, or "." if the variable is missing (strcpy of a NULL
+// getenv() result would crash).
+static const char *home_dir(void)
+{
+#ifdef _WIN32
+    const char *h = getenv("USERPROFILE");
+#else
+    const char *h = getenv("HOME");
+#endif
+    return h ? h : ".";
+}
+
+// True if `name` ends in exactly ".sav" (not .sav_bak / .sav.tmp / .sav.old,
+// the app's own backup and side files).
+static bool has_sav_suffix(const char *name)
+{
+    size_t n = strlen(name);
+#ifdef _WIN32
+    return n >= 4 && _stricmp(name + n - 4, ".sav") == 0;
+#else
+    return n >= 4 && strcmp(name + n - 4, ".sav") == 0;
+#endif
+}
+
 char *resolved_path = NULL;
 char *absolute_path = NULL;
 #ifdef _WIN32
@@ -32,10 +56,9 @@ int get_save_files(struct save_file_data *save_data)
     WIN32_FIND_DATA find_file_data;
     HANDLE hFind;
     char saves[MAX_FILE_PATH_CHAR];
-    strcpy(saves, save_dir);
-    strcat(saves, "\\*.sav");
+    int pattern_len = snprintf(saves, sizeof(saves), "%s\\*.sav", save_dir);
 
-    hFind = FindFirstFile(saves, &find_file_data);
+    hFind = (pattern_len > 0 && pattern_len < (int)sizeof(saves)) ? FindFirstFile(saves, &find_file_data) : INVALID_HANDLE_VALUE;
 
     if (hFind == INVALID_HANDLE_VALUE)
     {
@@ -73,7 +96,7 @@ int get_save_files(struct save_file_data *save_data)
 int write_key_to_config(const char *key, const char *value)
 {
     char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("USERPROFILE"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
     strcat(config_path, "\\config.ini");
 
@@ -89,7 +112,7 @@ void create_default_config(void)
     char config_path[MAX_PATH];
 
     // Get the current working directory
-    strcpy(config_path, getenv("USERPROFILE"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
 
     // Create the saves folder
@@ -109,7 +132,7 @@ void create_default_config(void)
         {
             printf("Error creating directory: %d\n", GetLastError());
             printf("Path: %s\n", config_path);
-            exit(GetLastError());
+            return; // never exit the app over this; callers carry on without a config
         }
     }
 
@@ -118,7 +141,7 @@ void create_default_config(void)
         if (GetLastError() != ERROR_ALREADY_EXISTS)
         {
             printf("Error creating saves directory: %d\n", GetLastError());
-            exit(GetLastError());
+            return; // never exit the app over this; callers carry on without a config
         }
     }
 
@@ -127,7 +150,7 @@ void create_default_config(void)
         if (GetLastError() != ERROR_ALREADY_EXISTS)
         {
             printf("Error creating logs directory: %d\n", GetLastError());
-            exit(GetLastError());
+            return; // never exit the app over this; callers carry on without a config
         }
     }
 
@@ -138,7 +161,7 @@ void create_default_config(void)
     if (fp == NULL)
     {
         printf("Error creating file: %d\n", GetLastError());
-        exit(GetLastError());
+        return; // never exit the app over this; callers carry on without a config
     }
 
     fputs("# This is a generated file. Only modify values, not keys.\n", fp);
@@ -150,7 +173,7 @@ void create_default_config(void)
 struct config_data read_key_from_config(void)
 {
     char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("USERPROFILE"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
 
     // if USR_DATA_DIR does not exist, create it
@@ -167,7 +190,7 @@ struct config_data read_key_from_config(void)
     // would be a dangling pointer, which previously caused the saved folder to
     // be lost on every launch.
     static char save_file_str[MAX_FILE_PATH_CHAR];
-    GetPrivateProfileString("app", "SAVE_FILE_DIR", 0, save_file_str, MAX_FILE_PATH_CHAR, ini);
+    GetPrivateProfileString("app", "SAVE_FILE_DIR", "DIR_NOT_SET", save_file_str, MAX_FILE_PATH_CHAR, ini);
 
     return (struct config_data){
         .save_file_dir = save_file_str
@@ -176,11 +199,6 @@ struct config_data read_key_from_config(void)
 void write_to_log(const char *msg, const uint8_t message_type)
 {
     FILE *fp;
-
-    char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("USERPROFILE"));
-    strcat(config_path, USR_DATA_DIR);
-    strcat(config_path, "\\logs");
 
     char date[20];
     char time_str[20];
@@ -191,27 +209,33 @@ void write_to_log(const char *msg, const uint8_t message_type)
     strftime(date, sizeof(date) - 1, "%Y-%m-%d", &t);
     strftime(time_str, sizeof(time_str) - 1, "%H:%M:%S", &t);
 
+    const char *kind;
     switch (message_type)
     {
     case E_LOG_MESSAGE_TYPE_ERROR:
-        strcat(config_path, "\\error-log@");
+        kind = "error-log@";
         break;
     case E_LOG_MESSAGE_TYPE_INFO:
-        strcat(config_path, "\\info-log@");
+        kind = "info-log@";
         break;
     default:
-        strcat(config_path, "\\log@");
+        kind = "log@";
         break;
     }
-    strcat(config_path, date);
-    strcat(config_path, ".txt");
 
-    fp = fopen(config_path, "a+");
+    // Logging must never take the app down: callers log in the middle of a
+    // save or trade, and exiting there would abandon the operation half-done.
+    // If the log can't be opened, report to stderr and carry on.
+    const char *home = getenv("USERPROFILE");
+    char config_path[MAX_FILE_PATH_CHAR];
+    int len = snprintf(config_path, sizeof(config_path), "%s%s\\logs\\%s%s.txt",
+                       home ? home : ".", USR_DATA_DIR, kind, date);
+    fp = (len > 0 && len < (int)sizeof(config_path)) ? fopen(config_path, "a+") : NULL;
 
     if (fp == NULL)
     {
-        printf("Error %d creating file!\n", GetLastError());
-        exit(GetLastError());
+        fprintf(stderr, "PokeromTrader: could not open log file (%lu): %s\n", (unsigned long)GetLastError(), msg);
+        return;
     }
 
     fputs(time_str, fp);
@@ -224,7 +248,7 @@ void write_to_log(const char *msg, const uint8_t message_type)
 int delete_app_data(void)
 {
     char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("USERPROFILE"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
 
     // Delete config.ini
@@ -255,7 +279,9 @@ int delete_app_data(void)
         do
         {
             // hfind contains .sav extension
-            if (strstr(find_file_data.cFileName, ".sav") == NULL)
+            // Saves only: keep the .sav_bak backups (*.sav also matches
+            // their 8.3 short names) and other side files.
+            if (!has_sav_suffix(find_file_data.cFileName))
             {
                 continue;
             }
@@ -333,7 +359,7 @@ void init_settings_from_config(struct save_file_data *save_file_data)
     if (save_file_dir != NULL)
     {
         strcpy(save_file_dir, config_data.save_file_dir);
-        strcpy((char *)save_file_data->save_dir, save_file_dir);
+        snprintf((char *)save_file_data->save_dir, sizeof(save_file_data->save_dir), "%s", save_file_dir);
     }
     else
     {
@@ -398,7 +424,7 @@ int write_key_to_config(const char *key, const char *value)
 {
     // Get config.ini path
     char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("HOME"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
     strcat(config_path, "/config.ini");
     // Open the INI file for reading and writing.
@@ -425,7 +451,7 @@ int write_key_to_config(const char *key, const char *value)
     while (fgets(line, sizeof(line), file) != NULL)
     {
         // Check if the line starts with the desired key.
-        if (strncmp(line, key, strlen(key)) == 0)
+        if (strncmp(line, key, strlen(key)) == 0 && line[strlen(key)] == '=')
         {
             // Key found, update the value.
             fprintf(temp_file, "%s=%s\n", key, value);
@@ -477,7 +503,7 @@ void create_default_config(bool overwrite)
     char cwd[MAX_FILE_PATH_CHAR];
 
     // Get current working dir
-    strcpy(cwd, getenv("HOME"));
+    snprintf(cwd, sizeof(cwd), "%s", home_dir());
 
     // create directory PokeromTrader
     const char *dir_path = USR_DATA_DIR;
@@ -493,31 +519,31 @@ void create_default_config(bool overwrite)
     strcpy(logs_dir, cwd);
     strcat(logs_dir, "/logs");
 
-    if (!overwrite)
+    (void)overwrite; // the folders are (re)created either way; mkdir ignores existing ones
     {
 
         int status = mkdir(cwd, 0777);
         if (status == -1)
         {
             printf("Error %d creating directory!\n", errno);
-            if (errno != 17)
-                exit(errno);
+            if (errno != EEXIST)
+                return; // never exit the app over this
         }
 
         status = mkdir(saves_dir, 0777);
         if (status == -1)
         {
             puts("Error creating saves directory");
-            if (errno != 17)
-                exit(errno);
+            if (errno != EEXIST)
+                return; // never exit the app over this
         }
 
         status = mkdir(logs_dir, 0777);
         if (status == -1)
         {
             puts("Error creating logs directory");
-            if (errno != 17)
-                exit(errno);
+            if (errno != EEXIST)
+                return; // never exit the app over this
         }
     }
 
@@ -528,7 +554,7 @@ void create_default_config(bool overwrite)
     if (fp == NULL)
     {
         printf("Error %d creating file!\n", errno);
-        exit(errno);
+        return; // never exit the app over this
     }
 
     fputs("# This is a generated file. Only modify values not keys.\n", fp);
@@ -550,7 +576,7 @@ char *read_key_from_config(const char *key)
     char *value = NULL;
 
     char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("HOME"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
     strcat(config_path, "/config.ini");
 
@@ -563,6 +589,10 @@ char *read_key_from_config(const char *key)
 
         // open after creation
         fp = fopen(config_path, "r");
+        if (fp == NULL)
+        {
+            return NULL;
+        }
     }
 
     while (getline(&line, &len, fp) != -1)
@@ -573,14 +603,24 @@ char *read_key_from_config(const char *key)
             continue;
         }
 
-        char *token = strtok(line, "=");
-        if (strcmp(token, key) == 0)
+        // Split on the first '=' only: a folder name may contain '=', and
+        // "KEY=" with nothing after it must not crash.
+        char *eq = strchr(line, '=');
+        if (eq == NULL)
         {
-            token = strtok(NULL, "=");
-            value = malloc(strlen(token) + 1);
+            continue;
+        }
+        *eq = 0;
+        if (strcmp(line, key) == 0)
+        {
+            char *token = eq + 1;
             // remove newline from end of token
-            token[strcspn(token, "\n")] = 0;
-            strcpy(value, token);
+            token[strcspn(token, "\r\n")] = 0;
+            value = malloc(strlen(token) + 1);
+            if (value != NULL)
+            {
+                strcpy(value, token);
+            }
             break;
         }
     }
@@ -596,7 +636,7 @@ char *read_key_from_config(const char *key)
 int delete_app_data(void)
 {
     char config_path[MAX_FILE_PATH_CHAR];
-    strcpy(config_path, getenv("HOME"));
+    snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
 
     DIR *dir;
@@ -624,7 +664,8 @@ int delete_app_data(void)
     while ((entry = readdir(dir)) != NULL)
     {
         // Check if the entry is a regular file with a .sav extension
-        if (entry->d_type == DT_REG && strstr(entry->d_name, ".sav"))
+        // Saves only: keep the .sav_bak backups and other side files.
+        if (entry->d_type == DT_REG && has_sav_suffix(entry->d_name))
         {
             // Combine the base path and file name
             char full_path[strlen(saves_dir) + 1 + strlen(entry->d_name) + 1];
@@ -698,11 +739,6 @@ int delete_app_data(void)
 void write_to_log(const char *msg, const uint8_t message_type)
 {
     FILE *fp;
-    char cwd[MAX_FILE_PATH_CHAR];
-
-    strcpy(cwd, getenv("HOME"));
-    strcat(cwd, USR_DATA_DIR);
-    strcat(cwd, "/logs");
 
     char date[20];
     char time_str[20];
@@ -712,27 +748,33 @@ void write_to_log(const char *msg, const uint8_t message_type)
     strftime(date, sizeof(date) - 1, "%Y-%m-%d", t);
     strftime(time_str, sizeof(time_str) - 1, "%H:%M:%S", t);
 
+    const char *kind;
     switch (message_type)
     {
     case E_LOG_MESSAGE_TYPE_ERROR:
-        strcat(cwd, "/error-log@");
+        kind = "error-log@";
         break;
     case E_LOG_MESSAGE_TYPE_INFO:
-        strcat(cwd, "/info-log@");
+        kind = "info-log@";
         break;
     default:
-        strcat(cwd, "/log@");
+        kind = "log@";
         break;
     }
-    strcat(cwd, date);
-    strcat(cwd, ".txt");
 
-    fp = fopen(cwd, "a+");
+    // Logging must never take the app down: callers log in the middle of a
+    // save or trade, and exiting there would abandon the operation half-done.
+    // If the log can't be opened, report to stderr and carry on.
+    const char *home = getenv("HOME");
+    char cwd[MAX_FILE_PATH_CHAR];
+    int len = snprintf(cwd, sizeof(cwd), "%s%s/logs/%s%s.txt",
+                       home ? home : ".", USR_DATA_DIR, kind, date);
+    fp = (len > 0 && len < (int)sizeof(cwd)) ? fopen(cwd, "a+") : NULL;
 
     if (fp == NULL)
     {
-        printf("Error %d creating file!\n", errno);
-        exit(errno);
+        fprintf(stderr, "PokeromTrader: could not open log file (%d): %s\n", errno, msg);
+        return;
     }
 
     fputs(time_str, fp);
@@ -750,7 +792,7 @@ void init_settings_from_config(struct save_file_data *save_file_data)
 
     if (config_save_path != NULL)
     {
-        strcpy((char *)save_file_data->save_dir, config_save_path);
+        snprintf((char *)save_file_data->save_dir, sizeof(save_file_data->save_dir), "%s", config_save_path);
     }
     else
     {

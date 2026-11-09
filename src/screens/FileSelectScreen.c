@@ -63,7 +63,8 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
         FilePathList dropped_files = LoadDroppedFiles();
         for (size_t i = 0; i < dropped_files.count; i++)
         {
-            if (save_file_data->num_saves < MAX_FILE_PATH_COUNT)
+            // Skip paths too long for the path table (raylib allows 4096).
+            if (save_file_data->num_saves < MAX_FILE_PATH_COUNT && strlen(dropped_files.paths[i]) < sizeof(save_file_data->saves_file_path[0]))
             {
                 // swap \\ with / in doprped file paths
                 for (size_t j = 0; j < strlen(dropped_files.paths[i]); j++)

@@ -171,7 +171,8 @@ static bool gen2_add_key_item(PokemonSave *pkmn_save, uint16_t item_id)
 {
     struct pksav_gen2_key_item_pocket *pocket =
         &pkmn_save->save.gen2_save.item_storage.p_item_bag->key_item_pocket;
-    for (int i = 0; i < pocket->count; i++)
+    // Cap at the pocket's 25 slots: the count byte comes from the save.
+    for (int i = 0; i < pocket->count && i < 25; i++)
     {
         if (pocket->item_indices[i] == (uint8_t)item_id)
         {

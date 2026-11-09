@@ -181,7 +181,14 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             else
             {
                 e = apply_event(pkmn_save, events[selected]);
-                if (e == error_none)
+                if (e != error_none && e != error_event_already_received)
+                {
+                    // apply_event may have changed the buffer before failing
+                    // (e.g. the ticket added but a flag write refused): drop
+                    // it so a later event can't save the half-applied one.
+                    reload_reason = "Couldn't add that event (Key Items pocket or boxes full?). Nothing was saved; reloaded.";
+                }
+                else if (e == error_none)
                 {
                     pksavhelper_error w = save_savefile_to_path(pkmn_save, save_path);
                     if (w != error_none)

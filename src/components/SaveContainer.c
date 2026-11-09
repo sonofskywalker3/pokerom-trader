@@ -81,7 +81,7 @@ void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle
     // draw pokemon party
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
-        for (int i = 0; i < pkmn_save->save.gen1_save.pokemon_storage.p_party->count; i++)
+        for (int i = 0; i < pkmn_save->save.gen1_save.pokemon_storage.p_party->count && i < 6; i++)
         {
             char pokemon_name[PKMN_NAME_TEXT_MAX + 1] = "\0";
             pksav_gen1_import_text(pkmn_save->save.gen1_save.pokemon_storage.p_party->nicknames[i], pokemon_name, PKMN_NAME_TEXT_MAX);
@@ -91,7 +91,7 @@ void draw_save_file_container(PokemonSave *pkmn_save, char *save_name, Rectangle
     }
     else if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
     {
-        for (int i = 0; i < pkmn_save->save.gen2_save.pokemon_storage.p_party->count; i++)
+        for (int i = 0; i < pkmn_save->save.gen2_save.pokemon_storage.p_party->count && i < 6; i++)
         {
             char pokemon_name[PKMN_NAME_TEXT_MAX + 1] = "\0";
             pksav_gen2_import_text(pkmn_save->save.gen2_save.pokemon_storage.p_party->nicknames[i], pokemon_name, PKMN_NAME_TEXT_MAX);
