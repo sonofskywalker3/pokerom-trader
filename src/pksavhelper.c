@@ -149,8 +149,28 @@ pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon
 // 0x50 terminator). Names are moved as raw bytes: converting them through
 // UTF-8 in 11-byte buffers cut off names with multi-byte characters.
 #define GB_NAME_FIELD 11
-#define GEN1_CHAR_E_ACUTE 0xBA
-#define GEN2_CHAR_E_ACUTE 0xEA
+// Gen 1 and Gen 2 share most of their character set; these are the name
+// characters that sit at different codes (pret pokered / pokecrystal
+// constants/charmap.asm). Pairs are {gen1, gen2}.
+static const uint8_t GB_CHARSET_MOVED[][2] = {
+    {0x60, 0x6E}, // prime
+    {0x61, 0x6F}, // double prime
+    {0xBA, 0xEA}, // e-acute
+    {0xBB, 0xD0}, // 'd
+    {0xBC, 0xD1}, // 'l
+    {0xBD, 0xD4}, // 's
+    {0xBE, 0xD5}, // 't
+    {0xBF, 0xD6}, // 'v
+    {0xE4, 0xD3}, // 'r
+    {0xE5, 0xD2}, // 'm
+    {0xED, 0x61}, // up triangle
+};
+#define GB_CHAR_APOSTROPHE 0xE0
+#define GB_CHAR_QUESTION 0xE6
+// Gen 1 characters Gen 2 lacks (curly quotes) and Gen 2 characters Gen 1
+// lacks (umlauts, arrows, phone, ...): written as ' and ? respectively.
+static const uint8_t GEN1_ONLY_CHARS[] = {0x70, 0x71};
+static const uint8_t GEN2_ONLY_CHARS[] = {0x60, 0x62, 0x71, 0x74, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4, 0xC5, 0xDF, 0xE9, 0xEB};
 
 static void gb_name_swap(uint8_t *a, uint8_t *b)
 {
@@ -160,18 +180,43 @@ static void gb_name_swap(uint8_t *a, uint8_t *b)
     memcpy(b, t, GB_NAME_FIELD);
 }
 
-// Copy a name between the Gen 1 and Gen 2 character sets. They agree on
-// every name character except the accented e.
+static uint8_t gb_char_convert(uint8_t c, bool gen1_to_gen2)
+{
+    for (size_t i = 0; i < sizeof(GB_CHARSET_MOVED) / sizeof(GB_CHARSET_MOVED[0]); i++)
+    {
+        if (c == GB_CHARSET_MOVED[i][gen1_to_gen2 ? 0 : 1])
+        {
+            return GB_CHARSET_MOVED[i][gen1_to_gen2 ? 1 : 0];
+        }
+    }
+    const uint8_t *only = gen1_to_gen2 ? GEN1_ONLY_CHARS : GEN2_ONLY_CHARS;
+    size_t n = gen1_to_gen2 ? sizeof(GEN1_ONLY_CHARS) : sizeof(GEN2_ONLY_CHARS);
+    for (size_t i = 0; i < n; i++)
+    {
+        if (c == only[i])
+        {
+            return gen1_to_gen2 ? GB_CHAR_APOSTROPHE : GB_CHAR_QUESTION;
+        }
+    }
+    return c;
+}
+
+// Copy a name between the Gen 1 and Gen 2 character sets, up to and including
+// the 0x50 terminator; the rest of the field is padded with terminators.
 static void gb_name_convert(uint8_t *dst, const uint8_t *src, bool gen1_to_gen2)
 {
+    bool ended = false;
     for (int i = 0; i < GB_NAME_FIELD; i++)
     {
-        uint8_t c = src[i];
-        if (gen1_to_gen2 && c == GEN1_CHAR_E_ACUTE)
-            c = GEN2_CHAR_E_ACUTE;
-        else if (!gen1_to_gen2 && c == GEN2_CHAR_E_ACUTE)
-            c = GEN1_CHAR_E_ACUTE;
-        dst[i] = c;
+        if (ended || src[i] == PKSAV_GEN1_TEXT_TERMINATOR)
+        {
+            ended = true;
+            dst[i] = PKSAV_GEN1_TEXT_TERMINATOR;
+        }
+        else
+        {
+            dst[i] = gb_char_convert(src[i], gen1_to_gen2);
+        }
     }
 }
 
@@ -776,12 +821,16 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
     // Refuse before touching either save: a bad slot, a Gen 1 glitch index
     // (no Gen 2 species; past SI_VICTREEBEL it would read past the tables), or
     // a Gen 2 mon (or egg, 0xFD) that has no Gen 1 counterpart.
+    if (pkmn_party_index1 >= PKSAV_GEN1_PARTY_NUM_POKEMON || pkmn_party_index2 >= PKSAV_GEN2_PARTY_NUM_POKEMON ||
+        pkmn_party_index1 >= player_gen1->save.gen1_save.pokemon_storage.p_party->count ||
+        pkmn_party_index2 >= player_gen2->save.gen2_save.pokemon_storage.p_party->count)
+    {
+        return error_swap_pkmn;
+    }
     {
         uint8_t g1_species = player_gen1->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index1];
         uint8_t g2_species = player_gen2->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index2];
-        if (pkmn_party_index1 >= player_gen1->save.gen1_save.pokemon_storage.p_party->count ||
-            pkmn_party_index2 >= player_gen2->save.gen2_save.pokemon_storage.p_party->count ||
-            g1_species > SI_VICTREEBEL || species_gen1_to_gen2[g1_species] == 0 ||
+        if (g1_species > SI_VICTREEBEL || species_gen1_to_gen2[g1_species] == 0 ||
             g2_species == 0 || g2_species > 151)
         {
             return error_swap_pkmn;
