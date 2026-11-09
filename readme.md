@@ -4,7 +4,7 @@ Trade Pokémon between your save files, evolve trade evolutions, manage your PC 
 
 > **About this fork:** Pokerom Trader was created by Spencer Vaughn ([savaughn/pokerom-trader](https://github.com/savaughn/pokerom-trader), MIT) on the [PKSav](https://github.com/savaughn/pksav) library (MIT). This fork continues it with Gen 3 and Gen 4 support, forward transfers, Bill's PC, a Pokédex view, events and many fixes. All original attribution and the MIT license are retained; see [LICENSE](LICENSE) and [Acknowledgments](#acknowledgments).
 
-![main_menu](https://github.com/savaughn/pokerom-trader/assets/25937456/78ef12ba-b04c-471d-a1b2-36bc55ab731e)
+![Main menu](docs/screenshots/main-menu.png)
 
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/sonofskywalker3/pokerom-trader)](https://github.com/sonofskywalker3/pokerom-trader/releases) [![GitHub issues](https://img.shields.io/github/issues/sonofskywalker3/pokerom-trader)](https://github.com/sonofskywalker3/pokerom-trader/issues) [![GitHub](https://img.shields.io/github/license/sonofskywalker3/pokerom-trader)](https://github.com/sonofskywalker3/pokerom-trader/blob/main/LICENSE)
 
@@ -16,6 +16,14 @@ Trade Pokémon between your save files, evolve trade evolutions, manage your PC 
 | Gen 2 | Gold, Silver, Crystal |
 | Gen 3 | Ruby, Sapphire, Emerald, FireRed, LeafGreen |
 | Gen 4 | Diamond, Pearl, Platinum, HeartGold, SoulSilver |
+
+## Screenshots
+
+| Trade | Bill's PC |
+|---|---|
+| ![Trading a Kirlia for a Snorlax between Emerald and FireRed](docs/screenshots/trade.png) | ![Bill's PC with a Crystal save](docs/screenshots/boxes.png) |
+| **Transfer forward** | **Pokédex** |
+| ![Sending Articuno from Crystal up to Emerald](docs/screenshots/transfer.png) | ![Ruby Pokédex, seen and owned](docs/screenshots/pokedex.png) |
 
 ## Features
 
