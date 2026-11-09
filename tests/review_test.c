@@ -344,11 +344,81 @@ static int test_pal_park_markings(void)
     return 0;
 }
 
+/* ---- trades and Bill's PC (Crystal / Emerald fixtures, in memory) ------- */
+
+static const char *CRYSTAL = "saves/refs/baseline/pokemon_crystal.sav";
+
+static int test_gen2_trade_keeps_symbol_names(void)
+{
+    PokemonSave a, b;
+    load_savefile_from_path(CRYSTAL, &a);
+    load_savefile_from_path(CRYSTAL, &b);
+    CHECK(a.save_generation_type == SAVE_GENERATION_2, "load Crystal");
+    /* "ABCDEFGHI" + male sign, and a 7-character OT ending in the female sign */
+    const uint8_t nick[11] = {0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0xEF, 0x50};
+    const uint8_t ot[11] = {0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0xF5, 0x50, 0x50, 0x50, 0x50};
+    memcpy(a.save.gen2_save.pokemon_storage.p_party->nicknames[0], nick, 11);
+    memcpy(a.save.gen2_save.pokemon_storage.p_party->otnames[0], ot, 11);
+    CHECK(swap_pkmn_at_index_between_saves(&a, &b, 0, 1) == error_none, "trade");
+    CHECK(memcmp(b.save.gen2_save.pokemon_storage.p_party->nicknames[1], nick, 11) == 0, "10-character nickname with a symbol kept");
+    CHECK(memcmp(b.save.gen2_save.pokemon_storage.p_party->otnames[1], ot, 11) == 0, "OT name with a symbol kept");
+    free_save(&a);
+    free_save(&b);
+    printf("gen2_trade_keeps_symbol_names PASS\n");
+    return 0;
+}
+
+static int test_gen2_pc_party_rules(void)
+{
+    PokemonSave s;
+    load_savefile_from_path(CRYSTAL, &s);
+    struct pksav_gen2_pokemon_party *party = s.save.gen2_save.pokemon_storage.p_party;
+    bills_pc_normalize_current_box(&s);
+    int empty_box = -1;
+    for (int b = 0; b < bills_pc_num_boxes(&s) && empty_box < 0; b++)
+        if (bills_pc_container_count(&s, BILLS_PC_LOC_BOX, b) == 0) empty_box = b;
+    CHECK(empty_box >= 0, "an empty box");
+    /* The fixture's Mew holds Mail, which can't go in a box: take it off. */
+    s.save.gen2_save.pokemon_storage.p_party_mail->party_mail[0].item_id = 0;
+
+    /* Everyone but slot 0 has fainted: depositing slot 0 is refused. */
+    for (int i = 1; i < party->count; i++) party->party[i].party_data.current_hp = 0;
+    struct bills_pc_slot p0 = {BILLS_PC_LOC_PARTY, 0, 0}, box = {BILLS_PC_LOC_BOX, empty_box, 0};
+    CHECK(bills_pc_move_pkmn(&s, p0, box) == error_swap_pkmn, "can't leave only fainted mons");
+    /* Others are eggs instead: refused too. */
+    for (int i = 1; i < party->count; i++) { party->party[i].party_data.current_hp = pksav_bigendian16(10); party->species[i] = 0xFD; }
+    CHECK(bills_pc_move_pkmn(&s, p0, box) == error_swap_pkmn, "can't leave only eggs");
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(&s, BILLS_PC_LOC_PARTY, 0, 1, &v);
+    CHECK(v.is_egg && v.dex == 0, "a Gen 2 egg shows no dex number (was #253)");
+    party->species[1] = party->party[1].pc_data.species; /* slot 1 can battle again */
+    CHECK(bills_pc_move_pkmn(&s, p0, box) == error_none, "deposit allowed with a battler left");
+
+    /* Reordering the party keeps HP instead of healing. */
+    party->party[0].party_data.current_hp = pksav_bigendian16(1);
+    struct bills_pc_slot pa = {BILLS_PC_LOC_PARTY, 0, 0}, pb = {BILLS_PC_LOC_PARTY, 0, 2};
+    CHECK(bills_pc_move_pkmn(&s, pa, pb) == error_none, "party swap");
+    CHECK(pksav_bigendian16(party->party[2].party_data.current_hp) == 1, "HP carried with the mon");
+
+    /* Out-of-range slots are refused. */
+    struct bills_pc_slot bad = {BILLS_PC_LOC_BOX, 0, 20}, badbox = {BILLS_PC_LOC_BOX, 14, 0};
+    CHECK(bills_pc_move_pkmn(&s, p0, bad) == error_swap_pkmn && bills_pc_move_pkmn(&s, p0, badbox) == error_swap_pkmn,
+          "Gen 2 box slot 20 / box 14 refused");
+    free_save(&s);
+
+    load_savefile_from_path(EMERALD, &s);
+    struct bills_pc_slot e0 = {BILLS_PC_LOC_PARTY, 0, 0}, e30 = {BILLS_PC_LOC_BOX, 0, 30};
+    CHECK(bills_pc_move_pkmn(&s, e0, e30) == error_swap_pkmn, "Gen 3 box slot 30 (would be box 1 slot 0) refused");
+    free_save(&s);
+    printf("gen2_pc_party_rules PASS\n");
+    return 0;
+}
+
 int main(void)
 {
-    if (!exists(EMERALD) || !exists(FIRERED))
+    if (!exists(EMERALD) || !exists(FIRERED) || !exists(CRYSTAL))
     {
-        printf("SKIP review_test (Gen 3 fixtures absent)\n");
+        printf("SKIP review_test (fixtures absent)\n");
         return 0;
     }
     if (test_same_file_refused()) return 1;
@@ -360,6 +430,8 @@ int main(void)
     if (test_gba_flag_bounds_and_daycare()) return 1;
     if (test_gen2_items()) return 1;
     if (test_pal_park_markings()) return 1;
+    if (test_gen2_trade_keeps_symbol_names()) return 1;
+    if (test_gen2_pc_party_rules()) return 1;
     printf("review_test: all cases passed\n");
     return 0;
 }
