@@ -607,11 +607,16 @@ enum pksav_error pksav_gba_save_save(
         p_gba_save->save_type
     );
 
-    // Pokémon Storage
+    // Pokémon Storage. Refresh each party mon's checksum before encrypting,
+    // like the PC path does: an edited party mon with a stale checksum loads
+    // in-game as a Bad Egg.
     for(size_t party_index = 0;
         party_index < PKSAV_GBA_PARTY_NUM_POKEMON;
         ++party_index)
     {
+        pksav_gba_set_pokemon_checksum(
+            &p_gba_save->pokemon_storage.p_party->party[party_index].pc_data
+        );
         pksav_gba_crypt_pokemon(
             &p_gba_save->pokemon_storage.p_party->party[party_index].pc_data,
             true // should_encrypt
