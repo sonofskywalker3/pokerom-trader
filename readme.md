@@ -34,7 +34,7 @@ Trade Pokémon between your save files, evolve trade evolutions, manage your PC 
   - Gen 3 → Gen 4 (Pal Park): keeps the OT, PID, IVs, EVs, ability, ribbons, markings, met data and more, following the real Pal Park rules.
   - The source save loses the Pokémon, so nothing is cloned.
 - **Bill's PC**: browse the party and every box, deposit, withdraw and swap, move between boxes, sort and search. It follows the games' rules: no boxing Mail holders, and never leaving the party without a Pokémon that can battle.
-- **Pokédex**: see what each save has seen and caught, with a to-do list that points to Pokémon you own but haven't registered, or could evolve or breed.
+- **Pokédex**: see what each save has seen and caught. In Bill's PC, **Dex To-Do** gathers into one box every Pokémon you could evolve or breed to fill a missing Pokédex entry, with badges showing how (level, stone, trade...).
 - **Events**: re-issue the distribution items that unlock in-game events, so the cartridge itself generates the Pokémon when you play to the spot. The GS Ball (Crystal → Celebi), Eon Ticket (R/S/E → Latias/Latios), Mystic Ticket (E/FR/LG → Lugia & Ho-Oh), Aurora Ticket (E/FR/LG → Deoxys) and Old Sea Map (Emerald → Mew). It can also give Gen 3 saves the 2006 US 10th Anniversary Celebi as a real distribution would.
 
 ## Your saves are safe
