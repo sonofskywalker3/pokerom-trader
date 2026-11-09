@@ -184,6 +184,11 @@ void draw_trainer_info(struct trainer_info *trainer, int x, int y, struct Traine
             shadow_text("Gen 2 only move", warn_text_pos_x, container_rec.y + 275, 20, WHITE);
             is_valid_trade[current_trainer_index] = false;
         }
+        else if (trainer_selection[current_trainer_index].pkmn_party_index == party_index && trade_status == E_TRADE_STATUS_GLITCH_PKMN && is_panel_out)
+        {
+            shadow_text("Glitch pokemon", warn_text_pos_x, container_rec.y + 275, 20, WHITE);
+            is_valid_trade[current_trainer_index] = false;
+        }
         else if (trainer_selection[current_trainer_index].pkmn_party_index == party_index && trade_status == E_TRADE_STATUS_HM_MOVE && is_panel_out)
         {
             shadow_text("Pokemon has HM move", warn_text_pos_x, container_rec.y + 275, 20, WHITE);

@@ -37,7 +37,8 @@ enum eligible_trade_status
     E_TRADE_STATUS_GEN2_PKMN,
     E_TRADE_STATUS_GEN2_MOVE,
     E_TRADE_STATUS_HM_MOVE,
-    E_TRADE_STATUS_MAIL
+    E_TRADE_STATUS_MAIL,
+    E_TRADE_STATUS_GLITCH_PKMN // Gen 1 index with no Gen 2 species (MissingNo. etc.)
 };
 
 #define GEN2_ITEM_EVERSTONE 0x70

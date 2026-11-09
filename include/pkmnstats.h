@@ -1026,7 +1026,7 @@ static const struct pkmn_base_stats pkmn_base_stats_gen1[SI_VICTREEBEL + 1] = {
     [SI_PIDGEOTTO] = {.max_hp = 63, .atk = 60, .def = 55, .spd = 71, .spcl = 50, .catch_rate = 120, .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_FLYING}},
     [SI_PIDGEOT] = {.max_hp = 83, .atk = 80, .def = 75, .spd = 91, .spcl = 70, .catch_rate = 45, .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_FLYING}},
     [SI_RATTATA] = {.max_hp = 30, .atk = 56, .def = 35, .spd = 72, .spcl = 25, .catch_rate = 255, .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_NORMAL}},
-    [SI_RATICATE] = {.max_hp = 55, .atk = 81, .def = 60, .spd = 97, .spcl = 50, .catch_rate = 127, .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_NORMAL}},
+    [SI_RATICATE] = {.max_hp = 55, .atk = 81, .def = 60, .spd = 97, .spcl = 50, .catch_rate = 90, /* pokered: 90 (127 is Gen 3+) */ .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_NORMAL}},
     [SI_SPEAROW] = {.max_hp = 40, .atk = 60, .def = 30, .spd = 70, .spcl = 31, .catch_rate = 255, .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_FLYING}},
     [SI_FEAROW] = {.max_hp = 65, .atk = 90, .def = 65, .spd = 100, .spcl = 61, .catch_rate = 90, .types = {PKSAV_GEN1_TYPE_NORMAL, PKSAV_GEN1_TYPE_FLYING}},
     [SI_EKANS] = {.max_hp = 35, .atk = 60, .def = 44, .spd = 55, .spcl = 40, .catch_rate = 255, .types = {PKSAV_GEN1_TYPE_POISON, PKSAV_GEN1_TYPE_POISON}},

@@ -102,7 +102,7 @@ pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         uint8_t pkmn_species = pkmn_save->save.gen1_save.pokemon_storage.p_party->species[pokemon_party_index];
-        uint8_t pkdex_entry = species_gen1_to_gen2[pkmn_species]; // Gen2 is pokedex ordered
+        uint8_t pkdex_entry = pkmn_species <= SI_VICTREEBEL ? species_gen1_to_gen2[pkmn_species] : 0; // Gen2 is pokedex ordered
         if (pkdex_entry < 1 || pkdex_entry > 151)
         {
             return error_none; // glitch / unknown index: no dex slot
@@ -145,17 +145,40 @@ pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon
     return pksav_error == PKSAV_ERROR_NONE ? error_none : error_update_pokedex;
 }
 
+// Gen 1/2 nickname and OT name fields are 11 bytes (10 characters plus the
+// 0x50 terminator). Names are moved as raw bytes: converting them through
+// UTF-8 in 11-byte buffers cut off names with multi-byte characters.
+#define GB_NAME_FIELD 11
+#define GEN1_CHAR_E_ACUTE 0xBA
+#define GEN2_CHAR_E_ACUTE 0xEA
+
+static void gb_name_swap(uint8_t *a, uint8_t *b)
+{
+    uint8_t t[GB_NAME_FIELD];
+    memcpy(t, a, GB_NAME_FIELD);
+    memcpy(a, b, GB_NAME_FIELD);
+    memcpy(b, t, GB_NAME_FIELD);
+}
+
+// Copy a name between the Gen 1 and Gen 2 character sets. They agree on
+// every name character except the accented e.
+static void gb_name_convert(uint8_t *dst, const uint8_t *src, bool gen1_to_gen2)
+{
+    for (int i = 0; i < GB_NAME_FIELD; i++)
+    {
+        uint8_t c = src[i];
+        if (gen1_to_gen2 && c == GEN1_CHAR_E_ACUTE)
+            c = GEN2_CHAR_E_ACUTE;
+        else if (!gen1_to_gen2 && c == GEN2_CHAR_E_ACUTE)
+            c = GEN1_CHAR_E_ACUTE;
+        dst[i] = c;
+    }
+}
+
 void swap_party_pkmn_at_indices(struct pksav_gen2_save *save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2)
 {
-    // swap nickname
-    char tmp_nickname1[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    char tmp_nickname2[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    pksav_gen2_import_text(save->pokemon_storage.p_party->nicknames[pkmn_party_index1], tmp_nickname1, PKMN_NAME_TEXT_MAX);
-    pksav_gen2_import_text(save->pokemon_storage.p_party->nicknames[pkmn_party_index2], tmp_nickname2, PKMN_NAME_TEXT_MAX);
-    pksav_gen2_export_text(tmp_nickname2, save->pokemon_storage.p_party->nicknames[pkmn_party_index1], PKMN_NAME_TEXT_MAX);
-    pksav_gen2_export_text(tmp_nickname1, save->pokemon_storage.p_party->nicknames[pkmn_party_index2], PKMN_NAME_TEXT_MAX);
-    save->pokemon_storage.p_party->nicknames[pkmn_party_index1][strlen(tmp_nickname2)] = 0x50;
-    save->pokemon_storage.p_party->nicknames[pkmn_party_index2][strlen(tmp_nickname1)] = 0x50;
+    // swap nickname (raw name bytes)
+    gb_name_swap(save->pokemon_storage.p_party->nicknames[pkmn_party_index1], save->pokemon_storage.p_party->nicknames[pkmn_party_index2]);
 
     // swap party data
     struct pksav_gen2_party_pokemon tmp_pokemon = save->pokemon_storage.p_party->party[pkmn_party_index1];
@@ -167,15 +190,8 @@ void swap_party_pkmn_at_indices(struct pksav_gen2_save *save, uint8_t pkmn_party
     save->pokemon_storage.p_party->species[pkmn_party_index1] = save->pokemon_storage.p_party->species[pkmn_party_index2];
     save->pokemon_storage.p_party->species[pkmn_party_index2] = tmp_species;
 
-    // swap otnames
-    char tmp_otname1[TRAINER_NAME_TEXT_MAX + 1] = "\0";
-    char tmp_otname2[TRAINER_NAME_TEXT_MAX + 1] = "\0";
-    pksav_gen2_import_text(save->pokemon_storage.p_party->otnames[pkmn_party_index1], tmp_otname1, TRAINER_NAME_TEXT_MAX);
-    pksav_gen2_import_text(save->pokemon_storage.p_party->otnames[pkmn_party_index2], tmp_otname2, TRAINER_NAME_TEXT_MAX);
-    pksav_gen2_export_text(tmp_otname2, save->pokemon_storage.p_party->otnames[pkmn_party_index1], TRAINER_NAME_TEXT_MAX);
-    pksav_gen2_export_text(tmp_otname1, save->pokemon_storage.p_party->otnames[pkmn_party_index2], TRAINER_NAME_TEXT_MAX);
-    save->pokemon_storage.p_party->otnames[pkmn_party_index1][strlen(tmp_otname2)] = 0x50;
-    save->pokemon_storage.p_party->otnames[pkmn_party_index2][strlen(tmp_otname1)] = 0x50;
+    // swap otnames (raw name bytes)
+    gb_name_swap(save->pokemon_storage.p_party->otnames[pkmn_party_index1], save->pokemon_storage.p_party->otnames[pkmn_party_index2]);
 }
 
 // Extracts the trainer info from the save file and updates the trainer struct
@@ -588,6 +604,10 @@ void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
     {
         // Get species index
         uint8_t species_index = pkmn_save->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index];
+        if (species_index > SI_VICTREEBEL)
+        {
+            return; // glitch index: no base stats to compute from
+        }
         uint8_t pkmn_level = pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].party_data.level;
 
         // Get the pokemon's EVs
@@ -683,6 +703,13 @@ enum eligible_trade_status check_trade_eligibility(struct trainer_info *trainer,
     // All Gen1 saves are eligible for trade except with HM moves
     if (trainer->trainer_generation == SAVE_GENERATION_1)
     {
+        // A glitch / unused internal index (MissingNo. and friends) has no Gen 2
+        // species; indices past SI_VICTREEBEL would also read past the table.
+        uint8_t species = trainer->pokemon_party.gen1_pokemon_party.species[pkmn_party_index];
+        if (species > SI_VICTREEBEL || species_gen1_to_gen2[species] == 0)
+        {
+            return E_TRADE_STATUS_GLITCH_PKMN;
+        }
         for (int move_index = 0; move_index < 4; move_index++)
         {
             uint8_t move = trainer->pokemon_party.gen1_pokemon_party.party[pkmn_party_index].pc_data.moves[move_index];
@@ -725,22 +752,8 @@ enum eligible_trade_status check_trade_eligibility(struct trainer_info *trainer,
     return E_TRADE_STATUS_ELIGIBLE;
 }
 
-bool check_if_reds_pikachu(const PokemonSave *pkmn_save, const uint8_t pkmn_party_index)
-{
-    char tmp_otname_pkmn[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    pksav_gen1_import_text(pkmn_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index], tmp_otname_pkmn, PKMN_NAME_TEXT_MAX);
-    char tmp_otname_trainer[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    pksav_gen1_import_text(pkmn_save->save.gen1_save.trainer_info.p_name, tmp_otname_trainer, PKMN_NAME_TEXT_MAX);
-    return pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.species == SI_PIKACHU &&                                 // Is a Pikachu
-           pkmn_save->save.gen1_save.save_type == PKSAV_GEN1_SAVE_TYPE_YELLOW &&                                                                       // Is from Yellow
-           pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.ot_id == *pkmn_save->save.gen1_save.trainer_info.p_id && // has the same OT ID as the trainer
-           strcmp(tmp_otname_pkmn, tmp_otname_trainer) == 0;                                                                                           // // has the same OT name as the trainer
-}
-
 pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player1_save, PokemonSave *player2_save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2)
 {
-    enum pksav_error pksav_error;
-
     // Since this is cross-gen assign the player by generation
     PokemonSave *player_gen1;
     PokemonSave *player_gen2;
@@ -760,39 +773,29 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
         pkmn_party_index2 = tmp_index;
     }
 
-    // swap nickname
-    char tmp_nickname1[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    char tmp_nickname2[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    pksav_error = pksav_gen1_import_text(player_gen1->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], tmp_nickname1, PKMN_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
+    // Refuse before touching either save: a bad slot, a Gen 1 glitch index
+    // (no Gen 2 species; past SI_VICTREEBEL it would read past the tables), or
+    // a Gen 2 mon (or egg, 0xFD) that has no Gen 1 counterpart.
     {
-        return error_swap_pkmn;
+        uint8_t g1_species = player_gen1->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index1];
+        uint8_t g2_species = player_gen2->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index2];
+        if (pkmn_party_index1 >= player_gen1->save.gen1_save.pokemon_storage.p_party->count ||
+            pkmn_party_index2 >= player_gen2->save.gen2_save.pokemon_storage.p_party->count ||
+            g1_species > SI_VICTREEBEL || species_gen1_to_gen2[g1_species] == 0 ||
+            g2_species == 0 || g2_species > 151)
+        {
+            return error_swap_pkmn;
+        }
     }
-    pksav_error = pksav_gen2_import_text(player_gen2->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], tmp_nickname2, PKMN_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    pksav_error = pksav_gen1_export_text(tmp_nickname2, player_gen1->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], PKMN_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    pksav_error = pksav_gen2_export_text(tmp_nickname1, player_gen2->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], PKMN_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    player_gen1->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1][strlen(tmp_nickname2)] = 0x50;
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    player_gen2->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2][strlen(tmp_nickname1)] = 0x50;
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
+
+    uint8_t tmp_name[GB_NAME_FIELD];
+    // swap nicknames: raw name bytes, converted between the Gen 1 and Gen 2
+    // character sets (a UTF-8 round trip through 11-byte buffers cut names
+    // with multi-byte characters such as the gender symbols)
+    gb_name_convert(tmp_name, player_gen1->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], true);
+    gb_name_convert(player_gen1->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1],
+                    player_gen2->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], false);
+    memcpy(player_gen2->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], tmp_name, GB_NAME_FIELD);
 
     // swap party
     // party_data
@@ -866,20 +869,19 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
     uint8_t item_override = trade_catch_rate_to_item[tmp_pokemon_gen1.pc_data.catch_rate];
     player_gen2->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index2].pc_data.held_item = item_override ? item_override : tmp_pokemon_gen1.pc_data.catch_rate;
     player_gen2->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index2].pc_data.caught_data = (uint16_t)0;
-    bool is_reds_pikachu_from_yellow = check_if_reds_pikachu(player_gen1, pkmn_party_index1);
-    player_gen2->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index2].pc_data.friendship = is_reds_pikachu_from_yellow ? GEN2_FRIENDSHIP_BASE_REDS_PIKACHU : GEN2_FRIENDSHIP_BASE;
+    // The Time Capsule gives every arriving mon base friendship (pokecrystal
+    // link.asm). (A Yellow-Pikachu exception here also checked the slot
+    // after it had already been overwritten by the outgoing mon.)
+    player_gen2->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index2].pc_data.friendship = GEN2_FRIENDSHIP_BASE;
     player_gen2->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index2].pc_data.pokerus = (uint8_t)0;
 
     // data not found in gen2
     player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.types[0] = pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].types[0];
     player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.types[1] = pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].types[1];
-    // The Time Capsule stores a Gen 2 mon's held item in the Gen 1 catch-rate
-    // byte (so it comes back with the item); an empty hand keeps the species'
-    // base catch rate there.
-    player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.catch_rate =
-        tmp_pokemon_gen2.pc_data.held_item != 0
-            ? tmp_pokemon_gen2.pc_data.held_item
-            : pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].catch_rate;
+    // The Time Capsule copies a Gen 2 mon's held item into the Gen 1
+    // catch-rate byte, an empty hand included (0), so it comes back with
+    // exactly the item it left with (pokecrystal link.asm).
+    player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.catch_rate = tmp_pokemon_gen2.pc_data.held_item;
 
     // swap species
     uint8_t tmp_species_gen1 = player_gen1->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index1];
@@ -889,31 +891,11 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
     player_gen1->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index1] = species_gen2_to_gen1[tmp_species_gen2];
     player_gen2->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index2] = species_gen1_to_gen2[tmp_species_gen1];
 
-    // swap otnames
-    char tmp_otname_gen1[TRAINER_NAME_TEXT_MAX + 1] = "\0";
-    char tmp_otname_gen2[TRAINER_NAME_TEXT_MAX + 1] = "\0";
-    pksav_error = pksav_gen1_import_text(player_gen1->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1], tmp_otname_gen1, TRAINER_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    pksav_error = pksav_gen2_import_text(player_gen2->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2], tmp_otname_gen2, TRAINER_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    pksav_error = pksav_gen1_export_text(tmp_otname_gen2, player_gen1->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1], TRAINER_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    pksav_error = pksav_gen2_export_text(tmp_otname_gen1, player_gen2->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2], TRAINER_NAME_TEXT_MAX);
-    if (pksav_error != PKSAV_ERROR_NONE)
-    {
-        return error_swap_pkmn;
-    }
-    player_gen1->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1][strlen(tmp_otname_gen2)] = 0x50;
-    player_gen2->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2][strlen(tmp_otname_gen1)] = 0x50;
+    // swap OT names (raw bytes; see the nicknames above)
+    gb_name_convert(tmp_name, player_gen1->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1], true);
+    gb_name_convert(player_gen1->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1],
+                    player_gen2->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2], false);
+    memcpy(player_gen2->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2], tmp_name, GB_NAME_FIELD);
 
     // Fill pkmn hp to max
     player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.current_hp = player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].party_data.max_hp;
@@ -924,8 +906,6 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
 
 pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, PokemonSave *player2_save, uint8_t pkmn_party_index1, uint8_t pkmn_party_index2)
 {
-    enum pksav_error pksav_error;
-
     // Gen 4 <-> Gen 4: a PK4 is self-contained (encryption keyed by its own
     // PID/checksum, no gen-internal species indices), so trading is a raw swap
     // of the two 236-byte party slots — valid across DP/Pt/HGSS too.
@@ -955,58 +935,16 @@ pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, Po
         return error_none;
     }
 
-    // swap nickname
-    char tmp_nickname1[PKMN_NAME_TEXT_MAX + 1] = "\0";
-    char tmp_nickname2[PKMN_NAME_TEXT_MAX + 1] = "\0";
+    // swap nicknames (raw name bytes: same character set on both sides)
     if (player1_save->save_generation_type == SAVE_GENERATION_1)
     {
-        pksav_error = pksav_gen1_import_text(player1_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], tmp_nickname1, PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen1_import_text(player2_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], tmp_nickname2, PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen1_export_text(tmp_nickname2, player1_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen1_export_text(tmp_nickname1, player2_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        player1_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1][strlen(tmp_nickname2)] = 0x50;
-        player2_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index2][strlen(tmp_nickname1)] = 0x50;
+        gb_name_swap(player1_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index1],
+                     player2_save->save.gen1_save.pokemon_storage.p_party->nicknames[pkmn_party_index2]);
     }
     else
     {
-        pksav_error = pksav_gen2_import_text(player1_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], tmp_nickname1, PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen2_import_text(player2_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], tmp_nickname2, PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen2_export_text(tmp_nickname2, player1_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index1], PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen2_export_text(tmp_nickname1, player2_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2], PKMN_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        player1_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index1][strlen(tmp_nickname2)] = 0x50;
-        player2_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2][strlen(tmp_nickname1)] = 0x50;
+        gb_name_swap(player1_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index1],
+                     player2_save->save.gen2_save.pokemon_storage.p_party->nicknames[pkmn_party_index2]);
     }
 
     // swap party
@@ -1037,58 +975,16 @@ pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, Po
         player2_save->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index2] = tmp_species;
     }
 
-    // swap otnames
-    char tmp_otname1[TRAINER_NAME_TEXT_MAX + 1] = "\0";
-    char tmp_otname2[TRAINER_NAME_TEXT_MAX + 1] = "\0";
+    // swap OT names (raw name bytes)
     if (player1_save->save_generation_type == SAVE_GENERATION_1)
     {
-        pksav_error = pksav_gen1_import_text(player1_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1], tmp_otname1, TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen1_import_text(player2_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index2], tmp_otname2, TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen1_export_text(tmp_otname2, player1_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1], TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen1_export_text(tmp_otname1, player2_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index2], TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        player1_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1][strlen(tmp_otname2)] = 0x50;
-        player2_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index2][strlen(tmp_otname1)] = 0x50;
+        gb_name_swap(player1_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index1],
+                     player2_save->save.gen1_save.pokemon_storage.p_party->otnames[pkmn_party_index2]);
     }
     else
     {
-        pksav_error = pksav_gen2_import_text(player1_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index1], tmp_otname1, TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen2_import_text(player2_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2], tmp_otname2, TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen2_export_text(tmp_otname2, player1_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index1], TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        pksav_error = pksav_gen2_export_text(tmp_otname1, player2_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2], TRAINER_NAME_TEXT_MAX);
-        if (pksav_error != PKSAV_ERROR_NONE)
-        {
-            return error_swap_pkmn;
-        }
-        player1_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index1][strlen(tmp_otname2)] = 0x50;
-        player2_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2][strlen(tmp_otname1)] = 0x50;
+        gb_name_swap(player1_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index1],
+                     player2_save->save.gen2_save.pokemon_storage.p_party->otnames[pkmn_party_index2]);
     }
 
     // Swap mail
@@ -1209,8 +1105,9 @@ bool evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_in
         // Update types
         pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.types[0] = pkmn_base_stats_gen1[evolution_index].types[0];
         pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.types[1] = pkmn_base_stats_gen1[evolution_index].types[1];
-        // Update catch rate
-        pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.catch_rate = pkmn_base_stats_gen1[evolution_index].catch_rate;
+        // The catch-rate byte is left alone, as the game does on evolution:
+        // for a mon that came through the Time Capsule it holds its Gen 2
+        // held item, which would otherwise be replaced.
         // Update condition to none
         pkmn_save->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.condition = PKSAV_GB_CONDITION_NONE;
     }
@@ -1497,6 +1394,14 @@ int bills_pc_container_count(const PokemonSave *pkmn_save, enum bills_pc_locatio
             count = pkmn_save->save.gen1_save.pokemon_storage.p_party->count;
             capacity = PKSAV_GEN1_PARTY_NUM_POKEMON;
         }
+        else if (!(*pkmn_save->save.gen1_save.pokemon_storage.p_current_box_num & 0x80) &&
+                 box_num != bills_pc_current_box_num(pkmn_save))
+        {
+            // Bit 7 clear: the player has never changed boxes, so every box but
+            // the current one is leftover data (e.g. from an older game on the
+            // same cartridge) that the game wipes on the first box change.
+            return 0;
+        }
         else
         {
             count = pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[box_num]->count;
@@ -1640,8 +1545,9 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
     }
     else
     {
-        out_view->dex = out_view->species;
         out_view->is_egg = (out_view->species == 0xFD); // the species list shows eggs as 0xFD
+        // An egg has no dex number to show (0xFD would read as #253).
+        out_view->dex = out_view->is_egg ? 0 : out_view->species;
     }
 }
 
@@ -2185,6 +2091,18 @@ static pksavhelper_error bills_pc_move_gen2(PokemonSave *s, struct bills_pc_slot
         struct g2_mon a, b;
         g2_capture(&sc, src.index, &a);
         g2_capture(&dc, dst.index, &b);
+        if (sc.is_party && dc.is_party)
+        {
+            // Reordering the party: carry each mon's whole party record (HP,
+            // status, stats) along instead of rebuilding it, which healed both.
+            struct pksav_gen2_party_pokemon pa = sc.party[src.index];
+            sc.party[src.index] = dc.party[dst.index];
+            dc.party[dst.index] = pa;
+            g2_write(s, &sc, src.index, &b);
+            g2_write(s, &dc, dst.index, &a);
+            g2_swap_party_mail(s, src.index, dst.index);
+            return error_none;
+        }
         g2_write(s, &sc, src.index, &b);
         g2_write(s, &dc, dst.index, &a);
         if (sc.is_party)
@@ -2519,8 +2437,129 @@ static pksavhelper_error bills_pc_move_gen4(PokemonSave *s, struct bills_pc_slot
     }
 }
 
+// A slot reference is in range for its container (box number and index).
+static bool bills_pc_slot_in_range(const PokemonSave *pkmn_save, struct bills_pc_slot s)
+{
+    if (s.location == BILLS_PC_LOC_PARTY)
+    {
+        return s.index >= 0 && s.index < bills_pc_party_capacity(pkmn_save);
+    }
+    if (s.location == BILLS_PC_LOC_BOX)
+    {
+        return s.box_num >= 0 && s.box_num < bills_pc_num_boxes(pkmn_save) &&
+               s.index >= 0 && s.index < bills_pc_box_capacity(pkmn_save);
+    }
+    return false;
+}
+
+#define GEN4_PK4_PARTY_DECRYPTED_SIZE 236
+#define GEN4_PK4_HELD_ITEM_OFFSET 0x0A
+#define GEN4_PK4_CURRENT_HP_OFFSET 0x8E
+#define GEN4_ITEM_FIRST_MAIL 137 // Grass Mail
+#define GEN4_ITEM_LAST_MAIL 148  // Brick Mail
+
+// Can the party mon at `i` battle (occupied, not an egg, HP above 0)?
+static bool party_mon_can_battle(const PokemonSave *s, int i)
+{
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(s, BILLS_PC_LOC_PARTY, 0, i, &v);
+    if (!v.occupied || v.is_egg)
+    {
+        return false;
+    }
+    switch (s->save_generation_type)
+    {
+    case SAVE_GENERATION_2:
+        return pksav_bigendian16(s->save.gen2_save.pokemon_storage.p_party->party[i].party_data.current_hp) > 0;
+    case SAVE_GENERATION_3:
+        return pksav_littleendian16(s->save.gba_save.pokemon_storage.p_party->party[i].party_data.current_hp) > 0;
+    case SAVE_GENERATION_4:
+    {
+        uint8_t dec[GEN4_PK4_PARTY_DECRYPTED_SIZE];
+        gen4_pk4_decrypt(gen4_party_slot_raw(&s->save.gen4_save, i), dec, true);
+        return (dec[GEN4_PK4_CURRENT_HP_OFFSET] | (dec[GEN4_PK4_CURRENT_HP_OFFSET + 1] << 8)) > 0;
+    }
+    default:
+        return true;
+    }
+}
+
+// Gen 2-4 refuse to leave the party without a Pokemon that can battle
+// (pokecrystal BillsPC_CheckMail_PreventBlackout; the GBA/DS storage systems
+// likewise): `leaving` goes to a box, and `incoming_box_mon` (if any) takes
+// its place. A Pokemon withdrawn from a box arrives healed, so only an egg
+// can't fight. Gen 1's PC only checks the party size.
+static bool move_keeps_a_battler(const PokemonSave *s, int leaving, const struct bills_pc_slot *incoming_box_mon)
+{
+    if (s->save_generation_type == SAVE_GENERATION_1)
+    {
+        return true;
+    }
+    if (incoming_box_mon != NULL)
+    {
+        struct bills_pc_entry_view v;
+        bills_pc_get_view(s, BILLS_PC_LOC_BOX, incoming_box_mon->box_num, incoming_box_mon->index, &v);
+        if (v.occupied && !v.is_egg)
+        {
+            return true;
+        }
+    }
+    int count = bills_pc_container_count(s, BILLS_PC_LOC_PARTY, 0);
+    for (int i = 0; i < count; i++)
+    {
+        if (i != leaving && party_mon_can_battle(s, i))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Gen 4 keeps a Mail's message in the party-only part of the record, which a
+// box doesn't store: depositing would keep the item but lose the letter.
+static bool gen4_party_mon_holds_mail(const PokemonSave *s, int i)
+{
+    uint8_t dec[GEN4_PK4_PARTY_DECRYPTED_SIZE];
+    gen4_pk4_decrypt(gen4_party_slot_raw(&s->save.gen4_save, i), dec, true);
+    int item = dec[GEN4_PK4_HELD_ITEM_OFFSET] | (dec[GEN4_PK4_HELD_ITEM_OFFSET + 1] << 8);
+    return item >= GEN4_ITEM_FIRST_MAIL && item <= GEN4_ITEM_LAST_MAIL;
+}
+
 pksavhelper_error bills_pc_move_pkmn(PokemonSave *pkmn_save, struct bills_pc_slot src, struct bills_pc_slot dst)
 {
+    // Reject out-of-range slots up front: e.g. box 0 slot 30 in Gen 3 would
+    // otherwise address box 1 slot 0 and overwrite whatever is there.
+    if (!bills_pc_slot_in_range(pkmn_save, src) || !bills_pc_slot_in_range(pkmn_save, dst))
+    {
+        return error_swap_pkmn;
+    }
+    // A party mon going into a box: party -> box, or box -> occupied party
+    // slot (the party mon there swaps into the box).
+    int leaving = -1;
+    const struct bills_pc_slot *incoming = NULL;
+    if (src.location == BILLS_PC_LOC_PARTY && dst.location == BILLS_PC_LOC_BOX &&
+        bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_PARTY, 0, src.index))
+    {
+        leaving = src.index;
+        incoming = bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_BOX, dst.box_num, dst.index) ? &dst : NULL;
+    }
+    else if (src.location == BILLS_PC_LOC_BOX && dst.location == BILLS_PC_LOC_PARTY &&
+             bills_pc_slot_occupied(pkmn_save, BILLS_PC_LOC_PARTY, 0, dst.index))
+    {
+        leaving = dst.index;
+        incoming = &src;
+    }
+    if (leaving >= 0)
+    {
+        if (!move_keeps_a_battler(pkmn_save, leaving, incoming))
+        {
+            return error_swap_pkmn;
+        }
+        if (pkmn_save->save_generation_type == SAVE_GENERATION_4 && gen4_party_mon_holds_mail(pkmn_save, leaving))
+        {
+            return error_swap_pkmn;
+        }
+    }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         return bills_pc_move_gen1(pkmn_save, src, dst);
@@ -2954,8 +2993,24 @@ void bills_pc_normalize_current_box(PokemonSave *pkmn_save)
     int cur = bills_pc_current_box_num(pkmn_save);
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
-        *pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[cur] =
-            *pkmn_save->save.gen1_save.pokemon_storage.p_current_box;
+        struct pksav_gen1_pokemon_storage *st = &pkmn_save->save.gen1_save.pokemon_storage;
+        *st->pp_boxes[cur] = *st->p_current_box;
+        // Bit 7 clear ("boxes not initialized"): every other box is leftover
+        // data. Empty them as the game's EmptyAllSRAMBoxes would on the first
+        // box change, and mark the boxes initialized, so nothing old can be
+        // shown, moved or written back as if it were real.
+        if (!(*st->p_current_box_num & 0x80))
+        {
+            for (int b = 0; b < PKSAV_GEN1_NUM_POKEMON_BOXES; b++)
+            {
+                if (b != cur)
+                {
+                    st->pp_boxes[b]->count = 0;
+                    st->pp_boxes[b]->species[0] = 0xFF;
+                }
+            }
+            *st->p_current_box_num |= 0x80;
+        }
     }
     else if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
     {
@@ -3091,7 +3146,7 @@ static int dex_box_select(const PokemonSave *s, int target, struct dex_box_cand 
             }
             struct bills_pc_entry_view v;
             bills_pc_get_view(s, BILLS_PC_LOC_BOX, b, i, &v);
-            if (!v.occupied || v.dex == 0)
+            if (!v.occupied || v.dex == 0 || v.is_egg) // an egg can't stand in for its species yet
             {
                 continue;
             }
