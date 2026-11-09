@@ -6,7 +6,8 @@
 #include <stddef.h>
 
 /* Generated from pret pokecrystal constants/item_constants.asm and pokeemerald
- * include/constants/items.h, matched by name. Only items a Gen 3 Pokemon can
+ * include/constants/items.h, matched by name (Gen 2 spells some differently:
+ * TINYMUSHROOM = TINY_MUSHROOM, ENERGYPOWDER = ENERGY_POWDER). Only items a Gen 3 Pokemon can
  * hold are mapped (key items, Gen 2 berries, mail, Apricorns and Gen 2-only
  * items such as the Pink/Polkadot Bow have no Gen 3 equivalent and map to 0). */
 static const uint16_t gen2_item_to_gen3_tbl[256] = {
@@ -57,6 +58,7 @@ static const uint16_t gen2_item_to_gen3_tbl[256] = {
     [0x31] =  75, // X_ATTACK
     [0x33] =  76, // X_DEFEND
     [0x34] =  77, // X_SPEED
+    [0x35] =  79, // X_SPECIAL
     [0x39] = 182, // EXP_SHARE
     [0x3E] =  69, // PP_UP
     [0x3F] =  34, // ETHER
@@ -68,6 +70,7 @@ static const uint16_t gen2_item_to_gen3_tbl[256] = {
     [0x4D] = 210, // SHARP_BEAK
     [0x51] = 211, // POISON_BARB
     [0x52] = 187, // KINGS_ROCK
+    [0x56] = 103, // TINYMUSHROOM (TINY_MUSHROOM)
     [0x57] = 104, // BIG_MUSHROOM
     [0x58] = 188, // SILVERPOWDER
     [0x5B] = 189, // AMULET_COIN
@@ -87,6 +90,7 @@ static const uint16_t gen2_item_to_gen3_tbl[256] = {
     [0x75] = 205, // MIRACLE_SEED
     [0x76] = 224, // THICK_CLUB
     [0x77] = 196, // FOCUS_BAND
+    [0x79] =  30, // ENERGYPOWDER (ENERGY_POWDER)
     [0x7A] =  31, // ENERGY_ROOT
     [0x7B] =  32, // HEAL_POWDER
     [0x7C] =  33, // REVIVAL_HERB

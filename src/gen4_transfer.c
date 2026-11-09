@@ -242,7 +242,11 @@ static bool build_pk4_from_gen3(const struct pksav_gba_pc_pokemon *g3,
     /* Keep the ability the mon had in Gen 3 (Pal Park copies it; the Gen 4
      * table would hand e.g. a Gen 3 Pidgey or Hypno a Gen 4-only ability). */
     dec[0x15] = gen3_ability_id(dex, (iv_egg >> 31) & 1u);
-    dec[0x16] = (uint8_t)(g3->markings & 0x0F); /* basic marks carry over */
+    /* Basic marks carry over, but the order differs: Gen 3 stores circle,
+     * square, triangle, heart (bits 0-3); Gen 4 circle, triangle, square,
+     * heart (then star, diamond). Swap bits 1 and 2 (PKHeX PK3 does the same). */
+    uint8_t m3 = (uint8_t)(g3->markings & 0x0F);
+    dec[0x16] = (uint8_t)((m3 & 0x09) | ((m3 & 0x02) << 1) | ((m3 & 0x04) >> 1));
     uint8_t lang = (uint8_t)(pksav_littleendian16(g3->language) & 0xFF);
     dec[0x17] = (lang >= 1 && lang <= 8) ? lang : 2 /* English */;
 
