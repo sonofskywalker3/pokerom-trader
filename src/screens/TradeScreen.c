@@ -13,6 +13,8 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
     } ui_selection = BUTTON_NONE;
     static bool show_trade_toast = false;
     static bool show_saving_icon = false;
+    bool force_reload = false;
+    const char *reload_reason = NULL;
 
     begin_virtual_frame();
     ClearBackground(RED);
@@ -52,7 +54,7 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
         }
     }
 
-    static pksavhelper_error pksavhelper_error = error_none;
+    static pksavhelper_error trade_error = error_none;
     if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) && ui_selection != BUTTON_NONE)
     {
         switch (ui_selection)
@@ -69,39 +71,65 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
                     reset_toast_message();
                 }
 
-                // create backup before trading
-                create_backup_save(save_player1, player1_save_path);
-                create_backup_save(save_player2, player2_save_path);
+                // Refuse before touching anything if a file changed on disk
+                // (e.g. the emulator saved) since it was loaded.
+                if (save_file_changed_on_disk(save_player1, player1_save_path) || save_file_changed_on_disk(save_player2, player2_save_path))
+                {
+                    force_reload = true;
+                    reload_reason = "A save changed on disk since it was loaded. Reloaded; nothing was traded.";
+                    break;
+                }
+
+                // create backup (a copy of the on-disk files) before trading
+                if (!create_backup_save(save_player1, player1_save_path) || !create_backup_save(save_player2, player2_save_path))
+                {
+                    trade_error = error_save_write_failed;
+                    show_trade_toast = true;
+                    break;
+                }
 
                 if (*is_same_generation)
                 {
-                    pksavhelper_error = swap_pkmn_at_index_between_saves(save_player1, save_player2, selected_index_trainer1, selected_index_trainer2);
+                    trade_error = swap_pkmn_at_index_between_saves(save_player1, save_player2, selected_index_trainer1, selected_index_trainer2);
                 }
                 else
                 {
-                    pksavhelper_error = swap_pkmn_at_index_between_saves_cross_gen(save_player1, save_player2, selected_index_trainer1, selected_index_trainer2);
+                    trade_error = swap_pkmn_at_index_between_saves_cross_gen(save_player1, save_player2, selected_index_trainer1, selected_index_trainer2);
+                    if (trade_error == error_none)
+                    {
+                        // Gen 1 has one Special, Gen 2 split it: recompute the
+                        // traded mons' stats for their new generation.
+                        update_pkmn_stats(save_player1, selected_index_trainer1);
+                        update_pkmn_stats(save_player2, selected_index_trainer2);
+                    }
                 }
-                if (pksavhelper_error != error_none)
+                if (trade_error != error_none)
                 {
-                    show_trade_toast = true;
+                    // A half-done swap leaves the buffers inconsistent: reload.
+                    force_reload = true;
+                    reload_reason = "Trade failed; nothing was saved. Saves reloaded from disk.";
                     break;
                 }
-                pksavhelper_error = update_seen_owned_pkmn(save_player1, selected_index_trainer1);
-                pksavhelper_error = update_seen_owned_pkmn(save_player2, selected_index_trainer2);
+                pksavhelper_error dex1 = update_seen_owned_pkmn(save_player1, selected_index_trainer1);
+                pksavhelper_error dex2 = update_seen_owned_pkmn(save_player2, selected_index_trainer2);
                 // Also heal any historical dex gaps while we're writing dex bits
                 pokedex_reconcile(save_player1);
                 pokedex_reconcile(save_player2);
-                if (pksavhelper_error != error_none)
+                // Both files are written to temp files and only committed
+                // together, so a failure can't leave one side traded (a clone
+                // or a lost mon).
+                trade_error = save_two_savefiles(save_player1, player1_save_path, save_player2, player2_save_path);
+                if (trade_error != error_none)
                 {
-                    show_trade_toast = true;
+                    force_reload = true;
+                    reload_reason = trade_error == error_save_stale
+                                        ? "A save changed on disk since it was loaded. Reloaded; nothing was traded."
+                                        : "Saving failed; nothing was traded. Saves reloaded from disk.";
                     break;
                 }
-                pksavhelper_error = save_savefile_to_path(save_player1, player1_save_path);
-                pksavhelper_error = save_savefile_to_path(save_player2, player2_save_path);
-                if (pksavhelper_error != error_none)
+                if (dex1 != error_none || dex2 != error_none)
                 {
-                    show_trade_toast = true;
-                    break;
+                    trade_error = error_update_pokedex;
                 }
                 show_saving_icon = true;
 
@@ -140,30 +168,28 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
     // Draw Toast with status message
     if (show_trade_toast)
     {
-        char toast_message[25];
-        switch (pksavhelper_error)
+        const char *toast_message;
+        switch (trade_error)
         {
         case error_none:
-            strcpy(toast_message, "Trade successful!");
+            toast_message = "Trade successful!";
             break;
         case error_update_pokedex:
-            strcpy(toast_message, "Pokédex update failed!");
+            toast_message = "Traded, but the Pokedex update failed";
             break;
         case error_swap_pkmn:
-            strcpy(toast_message, "Pokémon trade failed!");
-            break;
-        case error_update_save:
-            strcpy(toast_message, "Save update failed!");
+            toast_message = "Pokemon trade failed!";
             break;
         default:
+            toast_message = save_error_message(trade_error);
             break;
         }
 
-        show_trade_toast = !draw_toast_message(toast_message, TOAST_SHORT, TOAST_INFO);
+        show_trade_toast = !draw_toast_message((char *)toast_message, TOAST_SHORT, trade_error == error_none ? TOAST_INFO : TOAST_ERROR);
     }
     else
     {
-        pksavhelper_error = error_none;
+        trade_error = error_none;
     }
     if (show_saving_icon)
     {
@@ -171,6 +197,24 @@ void draw_trade(PokemonSave *save_player1, PokemonSave *save_player2, char *play
     }
 
     end_virtual_frame();
+
+    if (force_reload)
+    {
+        trainer1->trainer_id = 0;
+        trainer2->trainer_id = 0;
+        trainerSelection[0].pkmn_party_index = -1;
+        trainerSelection[1].pkmn_party_index = -1;
+        reset_details_panel();
+        show_trade_toast = false;
+        show_saving_icon = false;
+        trade_error = error_none;
+        ui_selection = BUTTON_NONE;
+        save_player1->save_generation_type = SAVE_GENERATION_NONE;
+        save_player2->save_generation_type = SAVE_GENERATION_NONE;
+        trade_saves_force_reload(reload_reason);
+        *current_screen = SCREEN_FILE_SELECT;
+        return;
+    }
 
     // ESCAPE nav back to file select
     if (IsKeyPressed(KEY_ESCAPE))

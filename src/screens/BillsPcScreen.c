@@ -229,6 +229,8 @@ static const char *bills_sort_label(enum bills_pc_sort_mode mode)
 
 // Draw a single storage row and report interaction.
 // Returns true if this row was clicked this frame.
+static bool bpc_leave_modal; // defined with the leave-confirmation dialog below
+
 static bool bills_draw_slot(PokemonSave *pkmn_save, struct bills_pc_slot slot, Rectangle rect,
                             int font_size, bool is_pending, const char *query,
                             struct bills_pc_entry_view *out_hovered, bool *out_has_hover)
@@ -339,7 +341,20 @@ static bool bills_draw_slot(PokemonSave *pkmn_save, struct bills_pc_slot slot, R
         DrawText("----", (int)rect.x + 6, (int)rect.y + 2, font_size, (Color){255, 255, 255, 90});
     }
 
-    return hovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+    return hovered && !bpc_leave_modal && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+}
+
+// "Leave without saving?" confirmation (Back / ESC with unsaved moves).
+static bool bpc_leave_modal = false;
+static bool bpc_leave_confirmed = false;
+static void bpc_on_leave_submit(void)
+{
+    bpc_leave_modal = false;
+    bpc_leave_confirmed = true;
+}
+static void bpc_on_leave_cancel(void)
+{
+    bpc_leave_modal = false;
 }
 
 static void bills_reset_state(PokemonSave *pkmn_save, int *box_view, bool *has_pending,
@@ -375,6 +390,9 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     static bool show_dex_toast = false;
     static enum E_TOAST_TYPE dex_toast_type = TOAST_SUCCESS;
     static char dex_toast[64] = "\0";
+    static const char *save_error_text = "";
+    static bool show_save_error_toast = false;
+    bool leave_requested = false;
 
     if (needs_init)
     {
@@ -391,7 +409,7 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     }
 
     // Search text entry
-    if (search_active)
+    if (search_active && !bpc_leave_modal)
     {
         int ch = GetCharPressed();
         while (ch > 0)
@@ -617,7 +635,7 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
              is_dirty ? (save_hover ? LIGHTGRAY : BLACK) : LIGHTGRAY);
 
     // ---------------- Input handling ----------------
-    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !bpc_leave_modal)
     {
         // Focus / unfocus search box
         search_active = CheckCollisionPointRec(GetMousePosition(), search_rec);
@@ -685,18 +703,11 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
         }
     }
 
-    if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON))
+    if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && !bpc_leave_modal)
     {
         if (back_hover)
         {
-            has_pending = false;
-            needs_init = true;
-            trainerSelection->pkmn_party_index = -1;
-            // Unsaved box moves mutate the file-select screen's cached save
-            // in place; drop the cache so it reloads clean from disk.
-            if (is_dirty)
-                free_evolve_saves();
-            *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
+            leave_requested = true;
         }
         else if (dex_hover)
         {
@@ -728,13 +739,47 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
         }
         else if (save_hover && is_dirty)
         {
-            create_backup_save(pkmn_save, save_path);
-            bills_pc_flush_current_box(pkmn_save);
-            save_savefile_to_path(pkmn_save, save_path);
-            create_trainer(pkmn_save, trainer);
-            is_dirty = false;
-            show_saving_icon = true;
-            show_saved_toast = true;
+            // Back up the file as it is on disk BEFORE writing the edits.
+            pksavhelper_error w;
+            if (save_file_changed_on_disk(pkmn_save, save_path))
+            {
+                w = error_save_stale;
+            }
+            else if (!create_backup_save(pkmn_save, save_path))
+            {
+                w = error_save_write_failed;
+            }
+            else
+            {
+                bills_pc_flush_current_box(pkmn_save);
+                w = save_savefile_to_path(pkmn_save, save_path);
+            }
+            if (w == error_none)
+            {
+                create_trainer(pkmn_save, trainer);
+                is_dirty = false;
+                show_saving_icon = true;
+                show_saved_toast = true;
+            }
+            else if (w == error_save_stale)
+            {
+                // The game (or another screen) wrote the file: our edits are
+                // against an old copy and can't be saved. Reload from disk.
+                has_pending = false;
+                needs_init = true;
+                is_dirty = false;
+                trainerSelection->pkmn_party_index = -1;
+                pkmn_save->save_generation_type = SAVE_GENERATION_NONE;
+                single_saves_force_reload("The save changed on disk since it was loaded. Box moves were NOT saved; reloaded.");
+                *current_screen = SCREEN_BILLS_PC_FILE_SELECT;
+                end_virtual_frame();
+                return;
+            }
+            else
+            {
+                save_error_text = save_error_message(w); // keep the edits; the user can retry
+                show_save_error_toast = true;
+            }
         }
     }
 
@@ -754,6 +799,15 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
     {
         show_dex_toast = !draw_toast_message(dex_toast, TOAST_MEDIUM, dex_toast_type);
     }
+    if (show_save_error_toast)
+    {
+        show_save_error_toast = !draw_toast_message((char *)save_error_text, TOAST_LONG, TOAST_ERROR);
+    }
+
+    if (bpc_leave_modal)
+    {
+        draw_confirmation_modal("Leave without saving your box changes?", "Unsaved moves will be discarded.", "Leave", bpc_on_leave_submit, bpc_on_leave_cancel, E_MODAL_WARN);
+    }
 
     evo_tip_draw();
 
@@ -761,9 +815,28 @@ void draw_bills_pc(PokemonSave *pkmn_save, char *save_path, struct trainer_info 
 
     if (IsKeyPressed(KEY_ESCAPE))
     {
+        if (bpc_leave_modal)
+        {
+            bpc_leave_modal = false; // ESC dismisses the dialog
+        }
+        else
+        {
+            leave_requested = true;
+        }
+    }
+
+    if (leave_requested && is_dirty && !bpc_leave_confirmed)
+    {
+        bpc_leave_modal = true; // ask first
+    }
+    else if (leave_requested || bpc_leave_confirmed)
+    {
+        bpc_leave_confirmed = false;
         has_pending = false;
         needs_init = true;
         trainerSelection->pkmn_party_index = -1;
+        // Unsaved box moves mutate the file-select screen's cached save
+        // in place; drop the cache so it reloads clean from disk.
         if (is_dirty)
             free_evolve_saves();
         *current_screen = SCREEN_BILLS_PC_FILE_SELECT;

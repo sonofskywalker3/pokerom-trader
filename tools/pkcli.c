@@ -197,8 +197,8 @@ static int cmd_trade(const char *p1, int i1, const char *p2, int i2)
     if (err != error_none) { fprintf(stderr, "ERROR: dex update save1 failed (%d)\n", err); return 1; }
     err = update_seen_owned_pkmn(&s2, (uint8_t)i2);
     if (err != error_none) { fprintf(stderr, "ERROR: dex update save2 failed (%d)\n", err); return 1; }
-    if (save_savefile_to_path(&s1, (char *)p1) != error_none) { fprintf(stderr, "ERROR: write save1\n"); return 1; }
-    if (save_savefile_to_path(&s2, (char *)p2) != error_none) { fprintf(stderr, "ERROR: write save2\n"); return 1; }
+    err = save_two_savefiles(&s1, (char *)p1, &s2, (char *)p2);
+    if (err != error_none) { fprintf(stderr, "ERROR: write failed, neither save changed: %s\n", save_error_message(err)); return 1; }
     printf("traded: %s (#%03u %s) <-> %s (#%03u %s)\n",
            p1, v1.dex, gen3_national_dex_name(v1.dex),
            p2, v2.dex, gen3_national_dex_name(v2.dex));
@@ -218,7 +218,7 @@ static int cmd_evolve(const char *path, int idx)
     else if (sav.save_generation_type == SAVE_GENERATION_3) ok = check_trade_evolution_gen3(&sav, (uint8_t)idx) == E_EVO_STATUS_ELIGIBLE;
     if (!ok) { fprintf(stderr, "ERROR: slot %d (#%03u %s) is not trade-evolution eligible\n", idx, v.dex, gen3_national_dex_name(v.dex)); return 1; }
     /* Mirrors EvolveScreen: evolve -> update stats -> dex -> save */
-    evolve_party_pokemon_at_index(&sav, (uint8_t)idx);
+    if (!evolve_party_pokemon_at_index(&sav, (uint8_t)idx)) { fprintf(stderr, "ERROR: evolve refused\n"); return 1; }
     update_pkmn_stats(&sav, (uint8_t)idx);
     update_seen_owned_pkmn(&sav, (uint8_t)idx);
     if (save_savefile_to_path(&sav, (char *)path) != error_none) { fprintf(stderr, "ERROR: write failed\n"); return 1; }
@@ -774,8 +774,8 @@ static int cmd_transfer(const char *src_path, const char *loc_s, int box, int id
         return 1;
     }
     bills_pc_flush_current_box(&s);
-    if (save_savefile_to_path(&d, (char *)dst_path) != error_none) { fprintf(stderr, "ERROR: write dst\n"); return 1; }
-    if (save_savefile_to_path(&s, (char *)src_path) != error_none) { fprintf(stderr, "ERROR: write src\n"); return 1; }
+    pksavhelper_error werr = save_two_savefiles(&d, (char *)dst_path, &s, (char *)src_path);
+    if (werr != error_none) { fprintf(stderr, "ERROR: write failed, neither save changed: %s\n", save_error_message(werr)); return 1; }
     printf("transferred: #%03u %s L%u item=%s%s\n", v.dex, gen3_national_dex_name(v.dex), v.level,
            held ? gen2_item_name(held) : "-", held && !gen2_item_to_gen3(held) ? " (dropped: no Gen 3 equivalent)" : "");
     return 0;

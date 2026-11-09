@@ -84,6 +84,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     static bool is_trade_eligible = false;
     static bool show_evolve_toast = false;
     static bool show_saving_icon = false;
+    static bool evolve_save_failed = false;
 
     int party_count = 0;
     if (save_generation_type == SAVE_GENERATION_1)
@@ -145,13 +146,15 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             if (selected_index == i)
             {
                 selected_index = NONE;
+                is_trade_eligible = false;
             }
             // Select a different index
             else
             {
                 selected_index = i;
+                is_trade_eligible = false;
                 if (save_generation_type == SAVE_GENERATION_1)
-                    is_trade_eligible = check_trade_evolution_gen1(pkmn_save, selected_index);
+                    is_trade_eligible = check_trade_evolution_gen1(pkmn_save, selected_index) == E_EVO_STATUS_ELIGIBLE;
                 else if (save_generation_type == SAVE_GENERATION_2)
                     is_trade_eligible = check_trade_evolution_gen2(pkmn_save, selected_index) == E_EVO_STATUS_ELIGIBLE;
                 else if (save_generation_type == SAVE_GENERATION_3)
@@ -159,6 +162,17 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             }
         }
     }
+
+    // A selection past the end of the party (e.g. after a reload) is stale
+    if (selected_index >= party_count)
+    {
+        selected_index = NONE;
+    }
+    if (selected_index == NONE)
+    {
+        is_trade_eligible = false;
+    }
+    const bool can_evolve = selected_index != NONE && is_trade_eligible;
 
     const int x_offset = SCREEN_WIDTH - 400;
 
@@ -272,14 +286,14 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
 
     // Evolve button (next button)
     const Rectangle evolve_button_rec = (Rectangle){NEXT_BUTTON_X - 15, NEXT_BUTTON_Y + 8, BUTTON_WIDTH, BUTTON_HEIGHT};
-    DrawText("Evolve !", evolve_button_rec.x + 15, evolve_button_rec.y + 10, 20, selected_index != NONE ? is_trade_eligible ? BLACK : LIGHTGRAY : LIGHTGRAY);
+    DrawText("Evolve !", evolve_button_rec.x + 15, evolve_button_rec.y + 10, 20, can_evolve ? BLACK : LIGHTGRAY);
 
     const Rectangle back_button_rec = (Rectangle){BACK_BUTTON_X - 15, BACK_BUTTON_Y + 8, BUTTON_WIDTH, BUTTON_HEIGHT};
     DrawText("< Back", back_button_rec.x + 15, back_button_rec.y + 10, 20, ui_selection == E_UI_BACK ? LIGHTGRAY : BLACK);
 
     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT))
     {
-        if (CheckCollisionPointRec(GetMousePosition(), evolve_button_rec) && is_trade_eligible)
+        if (CheckCollisionPointRec(GetMousePosition(), evolve_button_rec) && can_evolve)
         {
             ui_selection = E_UI_EVOLVE;
         }
@@ -298,26 +312,57 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
         switch (ui_selection)
         {
         case E_UI_EVOLVE:
-            if (CheckCollisionPointRec(GetMousePosition(), evolve_button_rec))
+            if (CheckCollisionPointRec(GetMousePosition(), evolve_button_rec) && can_evolve)
             {
-                // Create backup save before evolving
-                create_backup_save(pkmn_save, save_path);
-                
-                // Evolve pokemon with the simulated new trainer
-                evolve_party_pokemon_at_index(pkmn_save, selected_index);
-                // Update stats
-                update_pkmn_stats(pkmn_save, selected_index);
-                // Update pokedex
-                update_seen_owned_pkmn(pkmn_save, selected_index);
-                // Finalize pkmn data changes
-                show_saving_icon = true;
-                save_savefile_to_path(pkmn_save, save_path);
-                // Refresh trainer data
-                create_trainer(pkmn_save, trainer);
+                const char *reload_reason = NULL;
+                if (save_file_changed_on_disk(pkmn_save, save_path))
+                {
+                    reload_reason = "The save changed on disk since it was loaded. Reloaded; nothing evolved.";
+                }
+                // Back up the on-disk file before evolving
+                else if (!create_backup_save(pkmn_save, save_path))
+                {
+                    evolve_save_failed = true;
+                    show_evolve_toast = true;
+                }
+                // Evolve pokemon with the simulated new trainer (refuses a bad
+                // index or an ineligible mon without touching the save)
+                else if (evolve_party_pokemon_at_index(pkmn_save, (uint8_t)selected_index))
+                {
+                    // Update stats
+                    update_pkmn_stats(pkmn_save, (uint8_t)selected_index);
+                    // Update pokedex
+                    update_seen_owned_pkmn(pkmn_save, (uint8_t)selected_index);
+                    // Finalize pkmn data changes
+                    pksavhelper_error w = save_savefile_to_path(pkmn_save, save_path);
+                    if (w == error_none)
+                    {
+                        show_saving_icon = true;
+                        evolve_save_failed = false;
+                        // Refresh trainer data
+                        create_trainer(pkmn_save, trainer);
+                        show_evolve_toast = true;
+                    }
+                    else
+                    {
+                        reload_reason = w == error_save_stale
+                                            ? "The save changed on disk since it was loaded. Reloaded; nothing evolved."
+                                            : "Saving failed; nothing evolved. Reloaded from disk.";
+                    }
+                }
 
                 selected_index = NONE;
                 is_trade_eligible = false;
-                show_evolve_toast = true;
+                if (reload_reason != NULL)
+                {
+                    ui_selection = E_UI_NONE;
+                    show_evolve_toast = false;
+                    pkmn_save->save_generation_type = SAVE_GENERATION_NONE;
+                    single_saves_force_reload(reload_reason);
+                    *current_screen = SCREEN_EVOLVE_FILE_SELECT;
+                    end_virtual_frame();
+                    return;
+                }
             }
             else
             {
@@ -329,6 +374,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
             {
                 *current_screen = SCREEN_EVOLVE_FILE_SELECT;
                 selected_index = NONE;
+                is_trade_eligible = false;
             }
             else
             {
@@ -346,7 +392,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     }
     if (show_evolve_toast)
     {
-        show_evolve_toast = !draw_toast_message("Evolved Successfully!", TOAST_SHORT, TOAST_INFO);
+        show_evolve_toast = !draw_toast_message(evolve_save_failed ? "Couldn't back up the save; nothing evolved" : "Evolved Successfully!", TOAST_SHORT, evolve_save_failed ? TOAST_ERROR : TOAST_INFO);
     }
 
     end_virtual_frame();
@@ -355,6 +401,7 @@ void draw_evolve(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     {
         *current_screen = SCREEN_EVOLVE_FILE_SELECT;
         selected_index = NONE;
+        is_trade_eligible = false;
         ui_selection = E_UI_NONE;
     }
 }

@@ -132,9 +132,17 @@ void draw_trainer_info(struct trainer_info *trainer, int x, int y, struct Traine
     for (int party_index = 0; party_index < party_count; party_index++)
     {
         enum eligible_trade_status trade_status = E_TRADE_STATUS_ELIGIBLE;
-        if (!is_same_generation)
+        if (!is_same_generation || trainer_generation == SAVE_GENERATION_3)
         {
            trade_status = check_trade_eligibility(trainer, party_index);
+        }
+        // Validity is decided the moment the mon is selected; only the warning
+        // text waits for the details panel to slide out. (Gating validity on
+        // the animation left the Trade button live for a few frames.)
+        bool is_selected_here = current_trainer_index != -1 && trainer_selection[current_trainer_index].pkmn_party_index == party_index;
+        if (is_selected_here && trade_status != E_TRADE_STATUS_ELIGIBLE)
+        {
+            is_valid_trade[current_trainer_index] = false;
         }
 
         char pokemon_nickname[PKMN_NAME_TEXT_MAX + 1] = "\0";

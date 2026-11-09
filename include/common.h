@@ -213,6 +213,10 @@ typedef enum
     error_transfer_not_obtainable,
     error_transfer_no_space,
     error_event_already_received,
+    error_transfer_last_pkmn, // would leave the source party empty
+    error_transfer_hm_move,   // Pal Park refuses mons that know an HM
+    error_save_stale,         // the file changed on disk since it was loaded
+    error_save_write_failed, // writing/committing the file failed; disk unchanged
 } pksavhelper_error;
 
 #endif // COMMON_H

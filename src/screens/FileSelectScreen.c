@@ -6,10 +6,18 @@ static PokemonSave pkmn_saves[MAX_FILE_PATH_COUNT] = {
         .save_generation_type = SAVE_GENERATION_NONE,
     }};
 static uint8_t save_file_count = 0;
+static char reload_message[200] = "";
 
 void free_trade_saves(void)
 {
     free_pkmn_saves(pkmn_saves, &save_file_count);
+}
+
+void trade_saves_force_reload(const char *message)
+{
+    free_trade_saves();
+    snprintf(reload_message, sizeof(reload_message), "%s", message ? message : "");
+    reset_toast_message();
 }
 
 /**
@@ -98,7 +106,12 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
             update_selected_indexes_with_selection(selected_saves_index, &mouses_down_index, &is_moving_scroll);
 
             // Extract save file name from path
-            char *save_name = strrchr(save_file_data->saves_file_path[i], '/') + 1; // this crashes on windows because of /
+            char *save_name = save_file_data->saves_file_path[i];
+            char *last_sep = strrchr(save_name, '/');
+            if (last_sep != NULL)
+            {
+                save_name = last_sep + 1;
+            }
 
             // Draw save file container
             if (is_corrupted)
@@ -284,6 +297,13 @@ void draw_file_select(struct save_file_data *save_file_data, char *player1_save_
     if (show_incompatible_toast)
     {
         show_incompatible_toast = !draw_toast_message("No Gen 1/2 <-> Gen 4 path! Route through Gen 3.", TOAST_LONG, TOAST_ERROR);
+    }
+    if (reload_message[0] != '\0' && !show_duplicate_toast && !show_incompatible_toast)
+    {
+        if (draw_toast_message(reload_message, TOAST_LONG, TOAST_ERROR))
+        {
+            reload_message[0] = '\0';
+        }
     }
 
     end_virtual_frame();

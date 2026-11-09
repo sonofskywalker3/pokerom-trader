@@ -69,12 +69,13 @@ void draw_change_dir(struct save_file_data *save_file_data, GameScreen *current_
         {
             if (!IsPathFile(dropped_files.paths[0]))
             {
-                strcpy(input_text, dropped_files.paths[0]);
+                snprintf(input_text, sizeof(input_text), "%s", dropped_files.paths[0]);
             }
             else
             {
-                strcpy(input_text, GetDirectoryPath(dropped_files.paths[0]));
+                snprintf(input_text, sizeof(input_text), "%s", GetDirectoryPath(dropped_files.paths[0]));
             }
+            char_count = strlen(input_text);
             
         }
 
@@ -99,11 +100,12 @@ void draw_change_dir(struct save_file_data *save_file_data, GameScreen *current_
         has_shown_placeholder = true;
         int key = GetCharPressed();
         int backspace = GetKeyPressed();
-        if (key >= 32 && key <= 125 && char_count < MAX_FILE_PATH_CHAR)
+        if (key >= 32 && key <= 125 && char_count < MAX_FILE_PATH_CHAR - 1)
         {
-            // Append character to input_text
+            // Append character to input_text (keep room for, and write, the NUL)
             input_text[char_count] = (char)key;
             char_count++;
+            input_text[char_count] = '\0';
         }
         else if ((key == KEY_BACKSPACE || backspace == KEY_BACKSPACE) && char_count > 0)
         {

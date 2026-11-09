@@ -1,6 +1,163 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <stdbool.h>
+#include <ctype.h>
+#include <sys/stat.h>
 #include "pksavfilehelper.h"
+#include "filehelper.h"
+
+/************************************************************************
+ * On-disk fingerprints ("stamps")
+ *
+ * Every loaded save buffer remembers what its file looked like (size, mtime
+ * and a content hash) when it was loaded or last written by us. Before any
+ * write we re-check the file: if an emulator (or another screen holding its
+ * own copy) wrote it meanwhile, writing our stale buffer would silently undo
+ * that progress, so the write is refused instead. Stamps are keyed by the
+ * save's internal buffer pointer -- shared by struct copies of one load,
+ * distinct between separate loads -- plus the path.
+ ************************************************************************/
+struct save_stamp
+{
+    const void *id;
+    char path[1024];
+    long size;
+    long long mtime;
+    uint64_t hash;
+};
+#define SAVE_STAMP_MAX 512
+static struct save_stamp save_stamps[SAVE_STAMP_MAX];
+static int save_stamp_next = 0;
+
+static const void *save_identity(const PokemonSave *s)
+{
+    switch (s->save_generation_type)
+    {
+    case SAVE_GENERATION_1:
+        return s->save.gen1_save.p_internal;
+    case SAVE_GENERATION_2:
+        return s->save.gen2_save.p_internal;
+    case SAVE_GENERATION_3:
+        return s->save.gba_save.p_internal;
+    case SAVE_GENERATION_4:
+        return s->save.gen4_save.data;
+    default:
+        return NULL;
+    }
+}
+
+static bool same_path(const char *a, const char *b)
+{
+    for (;; a++, b++)
+    {
+        char ca = (*a == '\\') ? '/' : (char)tolower((unsigned char)*a);
+        char cb = (*b == '\\') ? '/' : (char)tolower((unsigned char)*b);
+        if (ca != cb)
+            return false;
+        if (ca == '\0')
+            return true;
+    }
+}
+
+static bool file_fingerprint(const char *path, long *size, long long *mtime, uint64_t *hash)
+{
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return false;
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+        return false;
+    uint64_t h = 1469598103934665603ULL; // FNV-1a 64
+    long n = 0;
+    unsigned char buf[8192];
+    size_t got;
+    while ((got = fread(buf, 1, sizeof(buf), f)) > 0)
+    {
+        for (size_t i = 0; i < got; i++)
+        {
+            h ^= buf[i];
+            h *= 1099511628211ULL;
+        }
+        n += (long)got;
+    }
+    bool ok = !ferror(f);
+    fclose(f);
+    *size = n;
+    *mtime = (long long)st.st_mtime;
+    *hash = h;
+    return ok;
+}
+
+static struct save_stamp *stamp_find(const void *id, const char *path)
+{
+    if (id == NULL)
+        return NULL;
+    for (int i = 0; i < SAVE_STAMP_MAX; i++)
+    {
+        if (save_stamps[i].id == id && same_path(save_stamps[i].path, path))
+            return &save_stamps[i];
+    }
+    return NULL;
+}
+
+static void stamp_record(const PokemonSave *s, const char *path)
+{
+    const void *id = save_identity(s);
+    if (id == NULL || strlen(path) >= sizeof(save_stamps[0].path))
+        return;
+    struct save_stamp *st = stamp_find(id, path);
+    if (st == NULL)
+    {
+        st = &save_stamps[save_stamp_next];
+        save_stamp_next = (save_stamp_next + 1) % SAVE_STAMP_MAX;
+    }
+    st->id = id;
+    strcpy(st->path, path);
+    if (!file_fingerprint(path, &st->size, &st->mtime, &st->hash))
+        st->id = NULL;
+}
+
+static void stamp_forget(const void *id)
+{
+    if (id == NULL)
+        return;
+    for (int i = 0; i < SAVE_STAMP_MAX; i++)
+    {
+        if (save_stamps[i].id == id)
+            save_stamps[i].id = NULL;
+    }
+}
+
+bool save_file_changed_on_disk(const PokemonSave *pkmn_save, const char *path)
+{
+    const struct save_stamp *st = stamp_find(save_identity(pkmn_save), path);
+    if (st == NULL)
+        return false; // never loaded from / written to this path: nothing to protect
+    long size;
+    long long mtime;
+    uint64_t hash;
+    if (!file_fingerprint(path, &size, &mtime, &hash))
+        return true; // deleted or unreadable since we loaded it
+    // Content decides; a bare mtime bump with identical bytes (e.g. a copy
+    // tool touching the file) is not a conflict.
+    return size != st->size || hash != st->hash;
+}
+
+const char *save_error_message(pksavhelper_error err)
+{
+    switch (err)
+    {
+    case error_none:
+        return "Saved";
+    case error_save_stale:
+        return "File changed on disk since it was loaded. Go back and reselect it to reload.";
+    case error_save_write_failed:
+    case error_update_save:
+        return "Could not write the save file. Nothing was changed on disk.";
+    default:
+        return "Saving failed.";
+    }
+}
 
 /**
  * @brief detects the save file generation of a save file
@@ -196,6 +353,11 @@ void load_savefile_from_path(const char *path, PokemonSave *pkmn_save)
     default:
         break;
     }
+
+    if (err == PKSAV_ERROR_NONE && save_identity(pkmn_save) != NULL)
+    {
+        stamp_record(pkmn_save, path);
+    }
 }
 /**
  * @brief saves the save buffer to a path
@@ -205,18 +367,18 @@ void load_savefile_from_path(const char *path, PokemonSave *pkmn_save)
 // Gen 1 keeps a complement-of-sum checksum for each box bank (SRAM banks 2
 // and 3) plus one per box; PKSav only maintains the main bank-1 checksum, so
 // refresh the box ones here after every write.
-static void gen1_refresh_box_checksums(const char *path)
+static bool gen1_refresh_box_checksums(const char *path)
 {
     FILE *f = fopen(path, "rb+");
     if (f == NULL)
     {
-        return;
+        return false;
     }
     uint8_t buf[0x8000];
     if (fread(buf, 1, sizeof(buf), f) != sizeof(buf))
     {
         fclose(f);
-        return;
+        return false;
     }
     for (int bank = 2; bank <= 3; bank++)
     {
@@ -237,20 +399,21 @@ static void gen1_refresh_box_checksums(const char *path)
             buf[base + 0x1A4D + box] = (uint8_t)~box_sum;
         }
     }
-    fseek(f, 0x4000, SEEK_SET);
-    fwrite(buf + 0x4000, 1, 0x4000, f);
-    fclose(f);
+    bool ok = fseek(f, 0x4000, SEEK_SET) == 0 && fwrite(buf + 0x4000, 1, 0x4000, f) == 0x4000;
+    ok = (fclose(f) == 0) && ok;
+    return ok;
 }
 
-pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
+// Serialize the buffer to `path` (no stale check, no commit step).
+static pksavhelper_error write_save_raw(PokemonSave *pkmn_save, const char *path)
 {
     enum pksav_error err = PKSAV_ERROR_NONE;
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
         err = pksav_gen1_save_save(path, &pkmn_save->save.gen1_save);
-        if (err == PKSAV_ERROR_NONE)
+        if (err == PKSAV_ERROR_NONE && !gen1_refresh_box_checksums(path))
         {
-            gen1_refresh_box_checksums(path);
+            err = PKSAV_ERROR_FILE_IO;
         }
     }
     else if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
@@ -269,16 +432,136 @@ pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
     if (err != PKSAV_ERROR_NONE)
     {
         error_handler(err, "Error saving save");
+        return error_save_write_failed;
     }
-    else
+    return error_none;
+}
+
+static void make_sibling_path(char *out, size_t out_size, const char *path, const char *suffix)
+{
+    snprintf(out, out_size, "%s%s", path, suffix);
+}
+
+static bool file_exists(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+// Replace `target` with `tmp`: target -> old, tmp -> target. On failure
+// everything is put back and false is returned. `old` is left in place on
+// success so a caller committing several files can still roll back; remove()
+// it afterwards.
+static bool commit_file(const char *tmp, const char *target, const char *old, bool *had_target)
+{
+    remove(old);
+    *had_target = file_exists(target);
+    if (*had_target && rename(target, old) != 0)
     {
-        printf("Saved to %s\n", path);
+        return false;
+    }
+    if (rename(tmp, target) != 0)
+    {
+        if (*had_target)
+        {
+            rename(old, target);
+        }
+        return false;
+    }
+    return true;
+}
+
+// Undo a successful commit_file: put the old file back.
+static void rollback_file(const char *target, const char *old, bool had_target)
+{
+    remove(target);
+    if (had_target)
+    {
+        rename(old, target);
+    }
+}
+
+pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
+{
+    if (save_file_changed_on_disk(pkmn_save, path))
+    {
+        write_to_log("Refusing to save: file changed on disk since it was loaded", E_LOG_MESSAGE_TYPE_ERROR);
+        return error_save_stale;
     }
 
-    if (err != PKSAV_ERROR_NONE)
+    char tmp[1100], old[1100];
+    make_sibling_path(tmp, sizeof(tmp), path, ".tmp");
+    make_sibling_path(old, sizeof(old), path, ".old");
+    remove(tmp);
+    pksavhelper_error e = write_save_raw(pkmn_save, tmp);
+    if (e != error_none)
     {
-        return error_update_save;
+        remove(tmp);
+        return e;
     }
+    bool had_target;
+    if (!commit_file(tmp, path, old, &had_target))
+    {
+        remove(tmp);
+        error_handler(PKSAV_ERROR_FILE_IO, "Error replacing save file");
+        return error_save_write_failed;
+    }
+    remove(old);
+    stamp_record(pkmn_save, path);
+    printf("Saved to %s\n", path);
+    return error_none;
+}
+
+pksavhelper_error save_two_savefiles(PokemonSave *save1, char *path1, PokemonSave *save2, char *path2)
+{
+    if (save_file_changed_on_disk(save1, path1) || save_file_changed_on_disk(save2, path2))
+    {
+        write_to_log("Refusing to save: file changed on disk since it was loaded", E_LOG_MESSAGE_TYPE_ERROR);
+        return error_save_stale;
+    }
+
+    char tmp1[1100], old1[1100], tmp2[1100], old2[1100];
+    make_sibling_path(tmp1, sizeof(tmp1), path1, ".tmp");
+    make_sibling_path(old1, sizeof(old1), path1, ".old");
+    make_sibling_path(tmp2, sizeof(tmp2), path2, ".tmp");
+    make_sibling_path(old2, sizeof(old2), path2, ".old");
+    remove(tmp1);
+    remove(tmp2);
+
+    // 1. Write both to temp files; the originals are untouched so far.
+    pksavhelper_error e = write_save_raw(save1, tmp1);
+    if (e == error_none)
+    {
+        e = write_save_raw(save2, tmp2);
+    }
+    if (e != error_none)
+    {
+        remove(tmp1);
+        remove(tmp2);
+        return e;
+    }
+
+    // 2. Commit both, rolling the first back if the second fails.
+    bool had1, had2;
+    if (!commit_file(tmp1, path1, old1, &had1))
+    {
+        remove(tmp1);
+        remove(tmp2);
+        error_handler(PKSAV_ERROR_FILE_IO, "Error replacing save file");
+        return error_save_write_failed;
+    }
+    if (!commit_file(tmp2, path2, old2, &had2))
+    {
+        rollback_file(path1, old1, had1);
+        remove(tmp2);
+        error_handler(PKSAV_ERROR_FILE_IO, "Error replacing save file");
+        return error_save_write_failed;
+    }
+    remove(old1);
+    remove(old2);
+    stamp_record(save1, path1);
+    stamp_record(save2, path2);
+    printf("Saved to %s and %s\n", path1, path2);
     return error_none;
 }
 
@@ -328,6 +611,7 @@ void free_pkmn_saves(PokemonSave *pkmn_saves, uint8_t *save_file_count)
     printf("PokeromTrader: %u save files had been allocated\n", *save_file_count);
     for (int i = 0; i < *save_file_count; i++)
     {
+        stamp_forget(save_identity(&pkmn_saves[i]));
         switch (pkmn_saves[i].save_generation_type)
         {
         case SAVE_GENERATION_1:
@@ -376,10 +660,67 @@ void free_pkmn_saves(PokemonSave *pkmn_saves, uint8_t *save_file_count)
     }
 }
 
-void create_backup_save(PokemonSave *pkmn_save, char* save_path)
+// Files already backed up this session (so later operations keep the
+// pre-session original instead of overwriting it with intermediate states).
+#define BACKUP_SESSION_MAX 256
+static char backed_up_paths[BACKUP_SESSION_MAX][1024];
+static int backed_up_count = 0;
+
+static bool copy_file_bytes(const char *src, const char *dst)
 {
-    char backup_path[1004] = "\0";
-    strcpy(backup_path, save_path);
-    strcat(backup_path, "_bak");
-    save_savefile_to_path(pkmn_save, backup_path);
+    FILE *in = fopen(src, "rb");
+    if (in == NULL)
+        return false;
+    FILE *out = fopen(dst, "wb");
+    if (out == NULL)
+    {
+        fclose(in);
+        return false;
+    }
+    bool ok = true;
+    unsigned char buf[16384];
+    size_t got;
+    while ((got = fread(buf, 1, sizeof(buf), in)) > 0)
+    {
+        if (fwrite(buf, 1, got, out) != got)
+        {
+            ok = false;
+            break;
+        }
+    }
+    ok = ok && !ferror(in);
+    fclose(in);
+    ok = (fclose(out) == 0) && ok;
+    return ok;
+}
+
+bool create_backup_save(PokemonSave *pkmn_save, char *save_path)
+{
+    (void)pkmn_save; // the backup is the file on disk, not the (possibly edited) buffer
+    for (int i = 0; i < backed_up_count; i++)
+    {
+        if (same_path(backed_up_paths[i], save_path))
+            return true; // pre-session original already kept
+    }
+    char backup_path[1100];
+    make_sibling_path(backup_path, sizeof(backup_path), save_path, "_bak");
+    char tmp[1110];
+    make_sibling_path(tmp, sizeof(tmp), backup_path, ".tmp");
+    bool ok = copy_file_bytes(save_path, tmp);
+    if (ok)
+    {
+        remove(backup_path);
+        ok = rename(tmp, backup_path) == 0;
+    }
+    if (!ok)
+    {
+        remove(tmp);
+        write_to_log("Could not create backup save", E_LOG_MESSAGE_TYPE_ERROR);
+        return false;
+    }
+    if (backed_up_count < BACKUP_SESSION_MAX && strlen(save_path) < sizeof(backed_up_paths[0]))
+    {
+        strcpy(backed_up_paths[backed_up_count++], save_path);
+    }
+    return true;
 }

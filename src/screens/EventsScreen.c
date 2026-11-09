@@ -167,11 +167,44 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
         }
         else if (apply_hover && can_apply)
         {
-            create_backup_save(pkmn_save, save_path);
-            pksavhelper_error e = apply_event(pkmn_save, events[selected]);
+            const char *reload_reason = NULL;
+            pksavhelper_error e;
+            if (save_file_changed_on_disk(pkmn_save, save_path))
+            {
+                reload_reason = "The save changed on disk since it was loaded. Reloaded; nothing was added.";
+                e = error_save_stale;
+            }
+            else if (!create_backup_save(pkmn_save, save_path))
+            {
+                e = error_save_write_failed;
+            }
+            else
+            {
+                e = apply_event(pkmn_save, events[selected]);
+                if (e == error_none)
+                {
+                    pksavhelper_error w = save_savefile_to_path(pkmn_save, save_path);
+                    if (w != error_none)
+                    {
+                        e = w;
+                        reload_reason = w == error_save_stale
+                                            ? "The save changed on disk since it was loaded. Reloaded; nothing was added."
+                                            : "Saving failed; nothing was added. Reloaded from disk.";
+                    }
+                }
+            }
+            if (reload_reason != NULL)
+            {
+                // The in-memory copy is stale or holds an unsaved edit: drop it.
+                needs_init = true;
+                pkmn_save->save_generation_type = SAVE_GENERATION_NONE;
+                single_saves_force_reload(reload_reason);
+                *current_screen = SCREEN_EVENTS_FILE_SELECT;
+                end_virtual_frame();
+                return;
+            }
             if (e == error_none)
             {
-                save_savefile_to_path(pkmn_save, save_path);
                 create_trainer(pkmn_save, trainer);
                 show_saving_icon = true;
                 show_applied_toast = true;
@@ -197,6 +230,7 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     {
         show_error_toast = !draw_toast_message((char *)(last_error == error_event_already_received ? "This save already received it" :
                                                last_error == error_transfer_no_space ? "Party and PC are full" :
+                                               last_error == error_save_write_failed ? "Couldn't back up the save; nothing was added" :
                                                                                        "Couldn't apply - Key Items pocket full"),
                                                TOAST_SHORT, TOAST_ERROR);
     }

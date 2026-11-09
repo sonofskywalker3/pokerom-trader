@@ -53,9 +53,14 @@ int get_save_files(struct save_file_data *save_data)
             size_t name_len = strlen(find_file_data.cFileName);
             if (name_len < 4 || _stricmp(find_file_data.cFileName + name_len - 4, ".sav") != 0)
                 continue;
-            // Combine the base path and file name
+            // The path table holds MAX_FILE_PATH_COUNT entries; ignore the rest.
+            if (num_saves >= MAX_FILE_PATH_COUNT)
+                break;
+            // Combine the base path and file name (skip paths too long to hold)
             char full_path[MAX_FILE_PATH_CHAR];
-            sprintf(full_path, "%s/%s", save_dir, find_file_data.cFileName);
+            int len = snprintf(full_path, sizeof(full_path), "%s/%s", save_dir, find_file_data.cFileName);
+            if (len < 0 || len >= (int)sizeof(full_path))
+                continue;
             strcpy(save_data->saves_file_path[num_saves], full_path);
             num_saves++;
         } while (FindNextFile(hFind, &find_file_data) != 0);
@@ -359,8 +364,14 @@ int get_save_files(struct save_file_data *save_data)
 
     while ((entry = readdir(dir)) != NULL)
     {
-        // Check if the entry is a regular file with a .sav extension
-        if (entry->d_type == DT_REG && strstr(entry->d_name, ".sav"))
+        // Check if the entry is a regular file ending in .sav (not the app's
+        // .sav_bak / .sav.tmp / .sav.old side files)
+        size_t name_len = strlen(entry->d_name);
+        if (num_saves >= MAX_FILE_PATH_COUNT)
+        {
+            break; // the path table holds MAX_FILE_PATH_COUNT entries
+        }
+        if (entry->d_type == DT_REG && name_len >= 4 && strcmp(entry->d_name + name_len - 4, ".sav") == 0)
         {
             // Combine the base path and file name
             char full_path[strlen(save_dir) + 1 + strlen(entry->d_name) + 1];
@@ -368,11 +379,13 @@ int get_save_files(struct save_file_data *save_data)
 
             // Get the absolute path
             absolute_path = realpath(full_path, NULL);
-            if (absolute_path)
+            if (absolute_path && strlen(absolute_path) < MAX_FILE_PATH_CHAR)
             {
                 strcpy(save_data->saves_file_path[num_saves],absolute_path);
                 num_saves++;
             }
+            free(absolute_path);
+            absolute_path = NULL;
         }
     }
 

@@ -7,10 +7,18 @@ static PokemonSave pkmn_saves[MAX_FILE_PATH_COUNT] = {
         .save_generation_type = SAVE_GENERATION_NONE,
     }};
 static uint8_t save_file_count = 0;
+static char reload_message[200] = "";
 
 void free_evolve_saves(void)
 {
     free_pkmn_saves(pkmn_saves, &save_file_count);
+}
+
+void single_saves_force_reload(const char *message)
+{
+    free_evolve_saves();
+    snprintf(reload_message, sizeof(reload_message), "%s", message ? message : "");
+    reset_toast_message();
 }
 
 void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave *pkmn_save, char *player_save_path, struct trainer_info *trainer, struct TrainerSelection *trainerSelection, enum single_player_menu_types menu_type, GameScreen *current_screen)
@@ -38,8 +46,16 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
         FilePathList dropped_files = LoadDroppedFiles();
         for (size_t i = 0; i < dropped_files.count; i++)
         {
-            if (save_file_data->num_saves < MAX_FILE_PATH_COUNT)
+            if (save_file_data->num_saves < MAX_FILE_PATH_COUNT && strlen(dropped_files.paths[i]) < sizeof(save_file_data->saves_file_path[0]))
             {
+                // Windows drops give backslash paths; the list code splits on '/'
+                for (char *c = dropped_files.paths[i]; *c != '\0'; c++)
+                {
+                    if (*c == '\\')
+                    {
+                        *c = '/';
+                    }
+                }
                 strcpy(save_file_data->saves_file_path[save_file_data->num_saves], dropped_files.paths[i]);
                 save_file_data->num_saves++;
             }
@@ -58,6 +74,7 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
 
         // Load save files for selection display
         load_display_files(save_file_data, pkmn_saves, &save_file_count);
+        save_file_count = save_file_data->num_saves;
 
         // Update and draw save files
         for (int i = 0; i < save_file_data->num_saves; i++)
@@ -85,7 +102,12 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
                 is_moving_scroll = false;
             }
 
-            char *save_name = strrchr(save_file_data->saves_file_path[i], '/') + 1;
+            char *save_name = save_file_data->saves_file_path[i];
+            char *last_sep = strrchr(save_name, '/');
+            if (last_sep != NULL)
+            {
+                save_name = last_sep + 1;
+            }
 
             if (is_corrupted)
             {
@@ -210,6 +232,14 @@ void draw_file_select_single(struct save_file_data *save_file_data, PokemonSave 
             break;
         default:
             break;
+        }
+    }
+
+    if (reload_message[0] != '\0')
+    {
+        if (draw_toast_message(reload_message, TOAST_LONG, TOAST_ERROR))
+        {
+            reload_message[0] = '\0';
         }
     }
 

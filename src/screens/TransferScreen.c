@@ -41,6 +41,9 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
     static bool show_saving_icon = false;
     static bool show_ok_toast = false;
     static bool show_err_toast = false;
+    static const char *err_text = "Can't transfer that one";
+    bool force_reload = false;
+    const char *reload_reason = NULL;
 
     int party_count = bills_pc_container_count(source, BILLS_PC_LOC_PARTY, 0);
     if (selected >= party_count)
@@ -158,24 +161,62 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
         }
         else if (xfer_hover && can_transfer)
         {
-            create_backup_save(source, source_path);
-            create_backup_save(dest, dest_path);
-            pksavhelper_error e = to_gen4
-                                      ? transfer_pkmn_gen3_to_gen4(source, (uint8_t)selected, dest)
-                                      : transfer_pkmn_to_gen3(source, (uint8_t)selected, dest);
-            if (e == error_none)
+            if (save_file_changed_on_disk(source, source_path) || save_file_changed_on_disk(dest, dest_path))
             {
-                save_savefile_to_path(source, source_path);
-                save_savefile_to_path(dest, dest_path);
-                create_trainer(source, source_tr);
-                create_trainer(dest, dest_tr);
-                selected = -1;
-                show_saving_icon = true;
-                show_ok_toast = true;
+                force_reload = true;
+                reload_reason = "A save changed on disk since it was loaded. Reloaded; nothing was transferred.";
+            }
+            else if (!create_backup_save(source, source_path) || !create_backup_save(dest, dest_path))
+            {
+                err_text = "Couldn't back up the saves; nothing was transferred";
+                show_err_toast = true;
             }
             else
             {
-                show_err_toast = true;
+                pksavhelper_error e = to_gen4
+                                          ? transfer_pkmn_gen3_to_gen4(source, (uint8_t)selected, dest)
+                                          : transfer_pkmn_to_gen3(source, (uint8_t)selected, dest);
+                if (e == error_none)
+                {
+                    // Both files go to temp files and are committed together:
+                    // a failure can't lose the mon (or leave it in both saves).
+                    pksavhelper_error w = save_two_savefiles(source, source_path, dest, dest_path);
+                    if (w == error_none)
+                    {
+                        create_trainer(source, source_tr);
+                        create_trainer(dest, dest_tr);
+                        selected = -1;
+                        show_saving_icon = true;
+                        show_ok_toast = true;
+                    }
+                    else
+                    {
+                        force_reload = true;
+                        reload_reason = w == error_save_stale
+                                            ? "A save changed on disk since it was loaded. Reloaded; nothing was transferred."
+                                            : "Saving failed; nothing was transferred. Saves reloaded from disk.";
+                    }
+                }
+                else
+                {
+                    // The transfer functions refuse before touching either save.
+                    switch (e)
+                    {
+                    case error_transfer_last_pkmn:
+                        err_text = "Can't send the last Pokemon in the party";
+                        break;
+                    case error_transfer_hm_move:
+                        err_text = "Pal Park refuses Pokemon that know an HM";
+                        break;
+                    case error_transfer_no_space:
+                        err_text = "No room in the destination party or boxes";
+                        break;
+                    default:
+                        err_text = "Can't transfer that one";
+                        break;
+                    }
+                    show_err_toast = true;
+                }
             }
         }
     }
@@ -190,10 +231,25 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
     }
     if (show_err_toast)
     {
-        show_err_toast = !draw_toast_message("Can't transfer that one", TOAST_SHORT, TOAST_ERROR);
+        show_err_toast = !draw_toast_message((char *)err_text, TOAST_SHORT, TOAST_ERROR);
     }
 
     end_virtual_frame();
+
+    if (force_reload)
+    {
+        selected = -1;
+        show_saving_icon = false;
+        show_ok_toast = false;
+        show_err_toast = false;
+        trainer1->trainer_id = 0;
+        trainer2->trainer_id = 0;
+        save_player1->save_generation_type = SAVE_GENERATION_NONE;
+        save_player2->save_generation_type = SAVE_GENERATION_NONE;
+        trade_saves_force_reload(reload_reason);
+        *current_screen = SCREEN_FILE_SELECT;
+        return;
+    }
 
     if (IsKeyPressed(KEY_ESCAPE))
     {
