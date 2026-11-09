@@ -40,7 +40,6 @@ uint16_t pksav_gba_get_section_checksum(
     assert(section_num < PKSAV_GBA_NUM_SAVE_SECTIONS);
 
     uint32_t checksum = 0;
-    uint16_t* p_checksum = (uint16_t*)&checksum;
 
     for(size_t index = 0;
         index < (pksav_gba_section_sizes[section_num]/4);
@@ -49,7 +48,10 @@ uint16_t pksav_gba_get_section_checksum(
         checksum += p_section->data32[index];
     }
 
-    return (p_checksum[0] + p_checksum[1]);
+    // Fold the two 16-bit halves. (This used to read them through a
+    // uint16_t* alias of the uint32_t, which -O3 strict aliasing may
+    // reorder before the sum: GCC flags it as "used uninitialized".)
+    return (uint16_t)((checksum & 0xFFFFu) + (checksum >> 16));
 }
 
 void pksav_gba_set_section_checksums(

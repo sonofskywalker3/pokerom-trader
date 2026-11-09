@@ -53,6 +53,45 @@ static bool _pksav_gba_save_slot_is_valid(
     return is_valid;
 }
 
+/*
+ * Stricter check, as the games do on load: every section must also carry a
+ * matching checksum, the 14 section ids must all be distinct, and all
+ * sections must share one save counter. A slot that was only partly written
+ * (power loss / emulator crash mid-save) fails this and must not be picked
+ * as the active slot even if its counter is higher.
+ */
+static bool _pksav_gba_save_slot_is_intact(
+    const union pksav_gba_save_slot* p_save_slot
+)
+{
+    if(!_pksav_gba_save_slot_is_valid(p_save_slot))
+    {
+        return false;
+    }
+
+    uint16_t seen_ids = 0;
+    const uint32_t save_index = p_save_slot->sections_arr[0].footer.save_index;
+    for(size_t section_index = 0;
+        section_index < PKSAV_GBA_NUM_SAVE_SECTIONS;
+        ++section_index)
+    {
+        const struct pksav_gba_save_section* p_section =
+            &p_save_slot->sections_arr[section_index];
+        uint8_t section_id = p_section->footer.section_id;
+
+        if((seen_ids & (1u << section_id)) ||
+           (p_section->footer.save_index != save_index) ||
+           (pksav_littleendian16(p_section->footer.checksum) !=
+            pksav_gba_get_section_checksum(p_section, section_id)))
+        {
+            return false;
+        }
+        seen_ids |= (uint16_t)(1u << section_id);
+    }
+
+    return true;
+}
+
 union pksav_gba_save_slot* pksav_gba_get_active_save_slot_ptr(
     uint8_t* p_buffer,
     size_t buffer_len
@@ -68,6 +107,16 @@ union pksav_gba_save_slot* pksav_gba_get_active_save_slot_ptr(
 
         bool slot0_valid = _pksav_gba_save_slot_is_valid(&save_slots[0]);
         bool slot1_valid = _pksav_gba_save_slot_is_valid(&save_slots[1]);
+
+        // Prefer slots that are fully intact (checksums + one save counter);
+        // fall back to the footer-only check if neither is.
+        bool slot0_intact = slot0_valid && _pksav_gba_save_slot_is_intact(&save_slots[0]);
+        bool slot1_intact = slot1_valid && _pksav_gba_save_slot_is_intact(&save_slots[1]);
+        if(slot0_intact || slot1_intact)
+        {
+            slot0_valid = slot0_intact;
+            slot1_valid = slot1_intact;
+        }
 
         uint32_t save_index0 = pksav_littleendian32(
                                    save_slots[0].section0.footer.save_index
@@ -699,16 +748,17 @@ enum pksav_error pksav_gba_save_save(
                 p_internal->save_len
             );
 
-    if(!error)
-    {
-        // With everything saved to the new slot, reset the pointers.
-        _pksav_gba_set_save_pointers(
-            p_gba_save,
-            p_internal->p_raw_save,
-            p_internal->save_len,
-            false // should_alloc_internal
-        );
-    }
+    // Reset the pointers (re-decrypting everything) whether or not the write
+    // succeeded: on failure the buffer would otherwise be left encrypted and
+    // any later use of it would read/write garbage. The new slot is already
+    // in the raw buffer with the higher counter, so it becomes active either
+    // way; callers that need the on-disk state after a failure must reload.
+    _pksav_gba_set_save_pointers(
+        p_gba_save,
+        p_internal->p_raw_save,
+        p_internal->save_len,
+        false // should_alloc_internal
+    );
 
     return error;
 }
