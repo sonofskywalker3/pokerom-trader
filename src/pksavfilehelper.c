@@ -3,6 +3,9 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "pksavfilehelper.h"
 #include "filehelper.h"
 
@@ -452,40 +455,100 @@ static bool file_exists(const char *path)
     return stat(path, &st) == 0;
 }
 
-// True if two paths name the same file (after making them absolute; compared
-// case-insensitively, with either slash). Used to refuse a two-file write to
-// one file, which would otherwise delete it: both sides share one .tmp/.old.
-static bool same_file_path(const char *a, const char *b)
+// Absolute form of a path (falls back to the path as given).
+static void absolute_path_of(const char *p, char *out, size_t out_size)
 {
-    char ca[4096], cb[4096];
 #ifdef _WIN32
-    if (_fullpath(ca, a, sizeof(ca)) == NULL)
-        snprintf(ca, sizeof(ca), "%s", a);
-    if (_fullpath(cb, b, sizeof(cb)) == NULL)
-        snprintf(cb, sizeof(cb), "%s", b);
+    if (_fullpath(out, p, out_size) == NULL)
+        snprintf(out, out_size, "%s", p);
 #else
-    if (realpath(a, ca) == NULL)
-        snprintf(ca, sizeof(ca), "%s", a);
-    if (realpath(b, cb) == NULL)
-        snprintf(cb, sizeof(cb), "%s", b);
+    char *r = realpath(p, NULL);
+    snprintf(out, out_size, "%s", r ? r : p);
+    free(r);
 #endif
-    return same_path(ca, cb);
 }
+
+static bool path_chars_equal(char x, char y)
+{
+#ifdef _WIN32
+    x = (x == '\\') ? '/' : (char)tolower((unsigned char)x);
+    y = (y == '\\') ? '/' : (char)tolower((unsigned char)y);
+#endif
+    return x == y;
+}
+
+// True if two existing paths are the same file on disk (hard links, junctions
+// and 8.3 short names included). *known is false if either can't be opened.
+static bool same_file_identity(const char *a, const char *b, bool *known)
+{
+#ifdef _WIN32
+    HANDLE ha = CreateFileA(a, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    HANDLE hb = CreateFileA(b, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    BY_HANDLE_FILE_INFORMATION ia, ib;
+    *known = ha != INVALID_HANDLE_VALUE && hb != INVALID_HANDLE_VALUE &&
+             GetFileInformationByHandle(ha, &ia) && GetFileInformationByHandle(hb, &ib);
+    bool same = *known && ia.dwVolumeSerialNumber == ib.dwVolumeSerialNumber &&
+                ia.nFileIndexHigh == ib.nFileIndexHigh && ia.nFileIndexLow == ib.nFileIndexLow;
+    if (ha != INVALID_HANDLE_VALUE)
+        CloseHandle(ha);
+    if (hb != INVALID_HANDLE_VALUE)
+        CloseHandle(hb);
+    return same;
+#else
+    struct stat sa, sb;
+    *known = stat(a, &sa) == 0 && stat(b, &sb) == 0;
+    return *known && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
+#endif
+}
+
+// True if `b` is `a` itself or one of the side files a write of `a` creates
+// or removes (`a` + ".tmp", ".old", ".rollback", ".interrupted*"). A two-file
+// write where the saves overlap like that would delete one of them: both
+// sides share one .tmp/.old, or one side's cleanup removes the other save.
+static bool paths_overlap(const char *a, const char *b)
+{
+    bool known;
+    if (same_file_identity(a, b, &known))
+        return true;
+    char ca[4096], cb[4096];
+    absolute_path_of(a, ca, sizeof(ca));
+    absolute_path_of(b, cb, sizeof(cb));
+    size_t i = 0;
+    while (ca[i] != '\0' && cb[i] != '\0' && path_chars_equal(ca[i], cb[i]))
+        i++;
+    if (ca[i] == '\0' && cb[i] == '\0')
+        return true; // same path (identity unknown: e.g. not created yet)
+    // One is the other plus a ".suffix": a side file of it.
+    return (ca[i] == '\0' && cb[i] == '.') || (cb[i] == '\0' && ca[i] == '.');
+}
+
+#define INTERRUPTED_KEEP_MAX 10
 
 // A leftover `<save>.old` means an earlier commit was interrupted (crash or
 // power loss between its steps) and may be the only copy of the pre-write
-// save. Keep it as `<save>.interrupted` instead of deleting it.
-static void keep_interrupted_old(const char *target, const char *old)
+// save. Keep it as `<save>.interrupted` (or .interrupted2 ... if earlier ones
+// exist) instead of deleting it. Returns false if it couldn't be kept; the
+// caller must then not touch `old`.
+static bool keep_interrupted_old(const char *target, const char *old)
 {
     if (!file_exists(old))
-        return;
-    char kept[1120];
-    make_sibling_path(kept, sizeof(kept), target, ".interrupted");
-    remove(kept);
-    if (rename(old, kept) == 0)
+        return true;
+    for (int n = 1; n <= INTERRUPTED_KEEP_MAX; n++)
     {
-        write_to_log("Kept a leftover .old file from an interrupted save as .interrupted", E_LOG_MESSAGE_TYPE_ERROR);
+        char kept[1120];
+        char suffix[32];
+        snprintf(suffix, sizeof(suffix), n == 1 ? ".interrupted" : ".interrupted%d", n);
+        make_sibling_path(kept, sizeof(kept), target, suffix);
+        if (file_exists(kept))
+            continue;
+        if (rename(old, kept) == 0)
+        {
+            write_to_log("Kept a leftover .old file from an interrupted save as .interrupted", E_LOG_MESSAGE_TYPE_ERROR);
+            return true;
+        }
+        return false;
     }
+    return false;
 }
 
 // Replace `target` with `tmp`: target -> old, tmp -> target. On failure the
@@ -495,9 +558,12 @@ static void keep_interrupted_old(const char *target, const char *old)
 static bool commit_file(const char *tmp, const char *target, const char *old, bool *had_target, bool *restored)
 {
     *restored = true;
-    keep_interrupted_old(target, old);
-    remove(old);
     *had_target = file_exists(target);
+    if (!keep_interrupted_old(target, old) || file_exists(old))
+    {
+        write_to_log("Refusing to save: a leftover .old file could not be kept aside", E_LOG_MESSAGE_TYPE_ERROR);
+        return false; // nothing touched
+    }
     if (*had_target && rename(target, old) != 0)
     {
         return false;
@@ -572,7 +638,7 @@ pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
 
 pksavhelper_error save_two_savefiles(PokemonSave *save1, char *path1, PokemonSave *save2, char *path2)
 {
-    if (same_file_path(path1, path2))
+    if (paths_overlap(path1, path2))
     {
         write_to_log("Refusing to save: both sides are the same file", E_LOG_MESSAGE_TYPE_ERROR);
         return error_save_same_file;
