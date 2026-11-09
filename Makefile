@@ -484,6 +484,9 @@ test:
 	@echo "== bugfix_test =="
 	$(CC) tests/bugfix_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/bugfix_test.exe
 	@./tests/bugfix_test.exe
+	@echo "== review_test =="
+	$(CC) tests/review_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/review_test.exe
+	@./tests/review_test.exe
 	@echo "== all tests passed =="
 
 clean:
