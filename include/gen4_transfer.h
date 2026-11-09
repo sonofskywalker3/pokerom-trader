@@ -23,4 +23,9 @@
  */
 pksavhelper_error transfer_pkmn_gen3_to_gen4(PokemonSave *src, uint8_t src_index, PokemonSave *dst);
 
+/* PID gender threshold for a National Dex number (same in Gen 3 and 4):
+ * 255 genderless, 0 always male, 254 always female, otherwise female when
+ * (PID & 0xFF) < threshold. */
+uint8_t pkmn_gender_threshold(uint16_t national_dex);
+
 #endif /* GEN4_TRANSFER_H */

@@ -6,6 +6,9 @@
 #include "pksavhelper.h"   // species maps, PKMN/TRAINER text lengths
 #include "gen3_stats.h"    // gen3_build_party_data, growth rate, exp
 #include "gen3_species.h"  // gen3_national_to_internal
+#include "gen2_items.h"    // Gen 2 -> Gen 3 held item ids
+#include "gen4_stats.h"    // ability slots (unchanged Gen 3 -> 4 for #1-386)
+#include "gen4_transfer.h" // gender thresholds
 #include <pksav.h>
 #include <string.h>
 
@@ -50,6 +53,10 @@ struct src_mon
     const uint8_t *otname;
     const uint8_t *nickname;
     bool is_gen1;
+    bool is_egg;
+    uint8_t held_item;  // Gen 2 item id (0 for Gen 1: that byte is a catch rate)
+    uint8_t pokerus;
+    bool ot_female;     // OT gender, when the source save knows it
 };
 
 static bool read_src_mon(PokemonSave *src, uint8_t i, struct src_mon *out)
@@ -74,6 +81,10 @@ static bool read_src_mon(PokemonSave *src, uint8_t i, struct src_mon *out)
         out->otname = party->otnames[i];
         out->nickname = party->nicknames[i];
         out->is_gen1 = true;
+        out->is_egg = false;
+        out->held_item = 0;
+        out->pokerus = 0;
+        out->ot_female = false;
         return true;
     }
     if (src->save_generation_type == SAVE_GENERATION_2)
@@ -96,9 +107,89 @@ static bool read_src_mon(PokemonSave *src, uint8_t i, struct src_mon *out)
         out->otname = party->otnames[i];
         out->nickname = party->nicknames[i];
         out->is_gen1 = false;
+        out->is_egg = (party->species[i] == 0xFD); // eggs show 0xFD in the species list
+        out->held_item = p->pc_data.held_item;
+        out->pokerus = p->pc_data.pokerus;
+        // Crystal records the player's gender; credit it to mons they caught.
+        struct pksav_gen2_save *g2 = &src->save.gen2_save;
+        out->ot_female = g2->trainer_info.p_gender != NULL && g2->trainer_info.p_id != NULL &&
+                         pksav_bigendian16(*g2->trainer_info.p_id) == out->ot_id &&
+                         *g2->trainer_info.p_gender != 0;
         return true;
     }
     return false;
+}
+
+// Gen 1/2 traits that live in the DVs, read the way the games read them.
+static bool gb_is_shiny(const uint8_t dv[PKSAV_NUM_GB_IVS])
+{
+    uint8_t atk = dv[PKSAV_GB_IV_ATTACK];
+    return dv[PKSAV_GB_IV_DEFENSE] == 10 && dv[PKSAV_GB_IV_SPEED] == 10 &&
+           dv[PKSAV_GB_IV_SPECIAL] == 10 && (atk & 2);
+}
+
+// 0 male, 1 female, 2 genderless. Gen 2 compares (Atk DV << 4 | Spd DV)
+// against the same thresholds Gen 3 compares the PID's low byte against.
+static int gb_gender(uint16_t dex, const uint8_t dv[PKSAV_NUM_GB_IVS])
+{
+    uint8_t t = pkmn_gender_threshold(dex);
+    if (t == 255) return 2;
+    if (t == 0) return 0;
+    if (t == 254) return 1;
+    uint8_t b = (uint8_t)((dv[PKSAV_GB_IV_ATTACK] << 4) | dv[PKSAV_GB_IV_SPEED]);
+    return b <= t ? 1 : 0;
+}
+
+static int gba_gender(uint16_t dex, uint32_t pid)
+{
+    uint8_t t = pkmn_gender_threshold(dex);
+    if (t == 255) return 2;
+    if (t == 0) return 0;
+    if (t == 254) return 1;
+    return (pid & 0xFF) < t ? 1 : 0;
+}
+
+static int gb_unown_letter(const uint8_t dv[PKSAV_NUM_GB_IVS])
+{
+    int v = ((dv[PKSAV_GB_IV_ATTACK] & 6) << 5) | ((dv[PKSAV_GB_IV_DEFENSE] & 6) << 3) |
+            ((dv[PKSAV_GB_IV_SPEED] & 6) << 1) | ((dv[PKSAV_GB_IV_SPECIAL] & 6) >> 1);
+    return v / 10;
+}
+
+static int gba_unown_letter(uint32_t pid)
+{
+    int v = (int)((((pid >> 24) & 3) << 6) | (((pid >> 16) & 3) << 4) | (((pid >> 8) & 3) << 2) | (pid & 3));
+    return v % 28;
+}
+
+// Fabricate a personality value (Gen 1/2 have none). Deterministic per mon,
+// and chosen so the Gen 3 mon keeps what the DVs decided in Gen 2: gender,
+// shininess (against the transferred OT ID with secret ID 0) and Unown's
+// letter. Nature and the ability slot come from whatever PID satisfies that.
+static uint32_t make_gen3_pid(const struct src_mon *s, const uint8_t dv[PKSAV_NUM_GB_IVS])
+{
+    bool want_shiny = gb_is_shiny(dv);
+    int want_gender = gb_gender(s->dex, dv);
+    int want_letter = (s->dex == 201) ? gb_unown_letter(dv) : -1;
+    uint32_t state = ((uint32_t)s->ot_id << 16) ^ ((uint32_t)s->dex * 2654435761u) ^ ((uint32_t)s->iv_data * 40503u);
+    for (int tries = 0; tries < (1 << 24); tries++)
+    {
+        state = state * 0x41C64E6Du + 0x6073u;
+        uint16_t lo = (uint16_t)(state >> 16);
+        state = state * 0x41C64E6Du + 0x6073u;
+        uint16_t hi = (uint16_t)(state >> 16);
+        if (want_shiny)
+        {
+            hi = (uint16_t)(s->ot_id ^ lo ^ (hi & 7)); // TID ^ SID(0) ^ hi ^ lo < 8
+        }
+        uint32_t cand = ((uint32_t)hi << 16) | lo;
+        bool shiny = (uint16_t)(s->ot_id ^ hi ^ lo) < 8;
+        if (cand == 0 || shiny != want_shiny) continue;
+        if (gba_gender(s->dex, cand) != want_gender) continue;
+        if (want_letter >= 0 && gba_unown_letter(cand) != want_letter) continue;
+        return cand;
+    }
+    return 0x1a2b3c4d;
 }
 
 // Build a Gen 3 Pokémon from a Gen 1/2 source mon. Returns the National Dex in
@@ -117,13 +208,7 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
 
     memset(out, 0, sizeof(*out));
 
-    // Fabricate a personality value (Gen 1/2 have none). It deterministically
-    // varies per mon and drives nature (PID % 25), ability bit, and gender.
-    uint32_t pid = ((uint32_t)s->ot_id << 16) ^ ((uint32_t)s->dex * 2654435761u) ^ ((uint32_t)s->iv_data * 40503u);
-    if (pid == 0)
-    {
-        pid = 0x1a2b3c4d;
-    }
+    uint32_t pid = make_gen3_pid(s, dv);
     out->personality = pksav_littleendian32(pid);
     out->ot_id.pid = pksav_littleendian16(s->ot_id);
     out->ot_id.sid = 0;
@@ -148,7 +233,7 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
 
     // Growth block: species, EXP for the current level, base friendship.
     out->blocks.growth.species = pksav_littleendian16(internal);
-    out->blocks.growth.held_item = 0; // Gen 2 item indices differ; dropped for now
+    out->blocks.growth.held_item = pksav_littleendian16(s->held_item ? gen2_item_to_gen3(s->held_item) : 0);
     uint8_t growth = gen3_growth_rate_for_dex(s->dex);
     out->blocks.growth.exp = pksav_littleendian32(gen3_exp_for_level(s->level, growth));
     out->blocks.growth.friendship = 70;
@@ -170,10 +255,13 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
     ivbits |= (uint32_t)((dv[PKSAV_GB_IV_SPEED] * 2) & 0x1F) << 15;
     ivbits |= (uint32_t)((dv[PKSAV_GB_IV_SPECIAL] * 2) & 0x1F) << 20; // Sp.Atk
     ivbits |= (uint32_t)((dv[PKSAV_GB_IV_SPECIAL] * 2) & 0x1F) << 25; // Sp.Def (shared Special DV)
-    if (pid & 1u)
+    // Gen 3 only uses PID bit 0 for species that have a second ability; a
+    // single-ability species with the bit set would end up with no ability.
+    if ((pid & 1u) && gen4_ability_id(s->dex, 1) != 0)
     {
         ivbits |= (1u << 31); // second ability slot
     }
+    out->blocks.misc.pokerus = s->pokerus;
     out->blocks.misc.iv_egg_ability = pksav_littleendian32(ivbits);
 
     // Origin info: level met (bits 0-6), origin game (7-10) = FireRed(4),
@@ -183,8 +271,14 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
     origin |= (uint16_t)(s->level & 0x7F);
     origin |= (uint16_t)(4u << 7);
     origin |= (uint16_t)(4u << 11);
+    if (s->ot_female)
+    {
+        origin |= PKSAV_GBA_POKEMON_OTGENDER_MASK;
+    }
     out->blocks.misc.origin_info = pksav_littleendian16(origin);
-    out->blocks.misc.met_location = 0;
+    // 0xFE is the games' own "met in a trade" location; 0 would read as
+    // Littleroot Town / Pallet Town.
+    out->blocks.misc.met_location = 0xFE;
 
     return true;
 }
@@ -239,6 +333,10 @@ pksavhelper_error transfer_pkmn_to_gen3(PokemonSave *src, uint8_t src_index, Pok
     {
         return error_swap_pkmn; // invalid source slot / unsupported gen
     }
+    if (s.is_egg)
+    {
+        return error_transfer_not_obtainable; // hatch it first
+    }
 
     struct pksav_gba_pc_pokemon mon;
     uint16_t dex;
@@ -284,5 +382,6 @@ pksavhelper_error transfer_pkmn_to_gen3(PokemonSave *src, uint8_t src_index, Pok
 
     // True transfer: remove from the source (no cloning).
     remove_src_party_mon(src, src_index);
+    pokedex_reconcile(dst); // register it as seen + caught on the Gen 3 side
     return error_none;
 }

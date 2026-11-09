@@ -100,10 +100,11 @@ static int check_save(const char *path, int allow_skip)
 
 int main(void)
 {
-    if (check_save("saves/Pokemon - Blue Version.sav", 0)) return 1;
-    if (check_save("saves/Pokemon - Yellow Version.sav", 0)) return 1;
-    if (check_save("saves/Pokemon - Crystal Version.sav", 0)) return 1;
-    if (check_save("saves/Pokemon - Gold Version.sav", 0)) return 1;
+    /* Personal Gen 1/2 saves are gitignored (saves/*.sav); skip when absent. */
+    if (check_save("saves/Pokemon - Blue Version.sav", 1)) return 1;
+    if (check_save("saves/Pokemon - Yellow Version.sav", 1)) return 1;
+    if (check_save("saves/Pokemon - Crystal Version.sav", 1)) return 1;
+    if (check_save("saves/Pokemon - Gold Version.sav", 1)) return 1;
     if (check_save("saves/refs/baseline/pokemon_ruby.sav", 0)) return 1;
     if (check_save("saves/refs/baseline/pokemon_emerald.sav", 0)) return 1;
     if (check_save("saves/gen4/diamond.sav", 1)) return 1;

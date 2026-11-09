@@ -439,6 +439,13 @@ check:
 	@echo Running cppcheck...
 	cppcheck --std=c11 --enable=all --inconclusive --suppress=missingInclude --suppress=missingIncludeSystem --suppress=unusedFunction src/
 
+# Headless save tool (tools/pkcli.c): list/dex/move/trade/evolve/items/hold/
+# flag/daycare/transfer/denick/release/event/copy. Not part of the app.
+CORE_SRC = src/pksavhelper.c src/pkmn_evolutions.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen4_transfer.c src/gen_transfer.c src/gen2_items.c src/events.c
+.PHONY: pkcli
+pkcli:
+	$(CC) tools/pkcli.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tools/pkcli.exe
+
 # Build and run the standalone unit tests (requires deps/pksav already built).
 # Each test is a self-contained C program with plain asserts; a nonzero exit
 # fails the target. Gen 4 cases self-skip when their (gitignored) fixtures are
@@ -468,6 +475,9 @@ test:
 	@echo "== dex_box_test =="
 	$(CC) tests/dex_box_test.c src/pkmn_evolutions.c src/pksavhelper.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c $(TEST_INC) $(TEST_LIB) -o tests/dex_box_test.exe
 	@./tests/dex_box_test.exe
+	@echo "== gen2_gen3_test =="
+	$(CC) tests/gen2_gen3_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/gen2_gen3_test.exe
+	@./tests/gen2_gen3_test.exe
 	@echo "== all tests passed =="
 
 clean:

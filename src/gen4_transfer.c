@@ -225,6 +225,12 @@ static void remove_gba_party_mon(PokemonSave *src, uint8_t k)
     p->count = (uint32_t)(n - 1);
 }
 
+uint8_t pkmn_gender_threshold(uint16_t national_dex)
+{
+    if (national_dex < 1 || national_dex > GEN4_NATIONAL_DEX_MAX) return 255;
+    return gender_threshold[national_dex];
+}
+
 pksavhelper_error transfer_pkmn_gen3_to_gen4(PokemonSave *src, uint8_t src_index, PokemonSave *dst)
 {
     if (src->save_generation_type != SAVE_GENERATION_3 ||
