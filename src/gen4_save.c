@@ -76,11 +76,15 @@ static enum gen4_game detect_game(const uint8_t *data)
 
 /* Compare two block footer counters; true if copy `b` is newer than copy `a`.
  * Primary counter first, secondary (save number) as tiebreak. 0xFFFFFFFF is
- * treated as older (uninitialized) unless the other is exactly 0xFFFFFFFE. */
-static bool footer_b_newer(const uint8_t *a_footer, const uint8_t *b_footer)
+ * treated as older (uninitialized) unless the other is exactly 0xFFFFFFFE.
+ * DP/Pt footers (0x14 bytes) carry two counters; the HG/SS footer (0x10
+ * bytes, pret pokeheartgold include/save.h) has one, so the word before it is
+ * block data, not a counter. */
+static bool footer_b_newer(const uint8_t *a_footer, const uint8_t *b_footer, bool has_second_counter)
 {
     const uint32_t a_major = rd32(a_footer + 0x00), b_major = rd32(b_footer + 0x00);
-    const uint32_t a_minor = rd32(a_footer + 0x04), b_minor = rd32(b_footer + 0x04);
+    const uint32_t a_minor = has_second_counter ? rd32(a_footer + 0x04) : 0;
+    const uint32_t b_minor = has_second_counter ? rd32(b_footer + 0x04) : 0;
     const uint32_t pairs[2][2] = {{a_major, b_major}, {a_minor, b_minor}};
     for (int i = 0; i < 2; i++)
     {
@@ -96,12 +100,16 @@ static bool footer_b_newer(const uint8_t *a_footer, const uint8_t *b_footer)
     return false; /* tie -> keep primary (a) */
 }
 
-/* A block copy is intact if its footer carries the magic and its own size and
- * the stored CRC matches the data, which is how the games decide on load. */
-static bool block_intact(const uint8_t *data, uint32_t base, uint32_t block_size, uint32_t crc_skip)
+#define GEN4_BLOCK_ID_GENERAL 0
+#define GEN4_BLOCK_ID_STORAGE 1
+
+/* A block copy is intact if its footer carries the magic, its own size and
+ * block id, and the stored CRC matches the data, which is how the games
+ * decide on load (pret pokeplatinum / pokeheartgold savedata). */
+static bool block_intact(const uint8_t *data, uint32_t base, uint32_t block_size, uint32_t crc_skip, uint8_t block_id)
 {
     const uint8_t *end = data + base + block_size;
-    return footer_magic_ok(rd32(end - 0x08)) && rd32(end - 0x0C) == block_size &&
+    return footer_magic_ok(rd32(end - 0x08)) && rd32(end - 0x0C) == block_size && end[-4] == block_id &&
            rd16(end - 0x02) == gen4_crc16_ccitt(data + base, block_size - crc_skip);
 }
 
@@ -111,19 +119,20 @@ static bool block_intact(const uint8_t *data, uint32_t base, uint32_t block_size
  * if its counter is newer; otherwise loading it and re-saving would stamp a
  * fresh CRC on the damaged data. If neither copy is intact, fall back to the
  * counters alone. */
-static uint32_t select_active(const uint8_t *data, uint32_t block_off_in_part, uint32_t block_size, uint32_t crc_skip)
+static uint32_t select_active(const uint8_t *data, uint32_t block_off_in_part, uint32_t block_size, uint32_t crc_skip, uint8_t block_id)
 {
     uint32_t base0 = block_off_in_part;
     uint32_t base1 = GEN4_PARTITION_SIZE + block_off_in_part;
-    bool ok0 = block_intact(data, base0, block_size, crc_skip);
-    bool ok1 = block_intact(data, base1, block_size, crc_skip);
+    bool ok0 = block_intact(data, base0, block_size, crc_skip, block_id);
+    bool ok1 = block_intact(data, base1, block_size, crc_skip, block_id);
     if (ok0 != ok1)
     {
         return ok1 ? base1 : base0;
     }
-    const uint8_t *f0 = data + base0 + block_size - 0x14;
-    const uint8_t *f1 = data + base1 + block_size - 0x14;
-    return footer_b_newer(f0, f1) ? base1 : base0;
+    /* The footer (and its first counter) starts crc_skip bytes from the end. */
+    const uint8_t *f0 = data + base0 + block_size - crc_skip;
+    const uint8_t *f1 = data + base1 + block_size - crc_skip;
+    return footer_b_newer(f0, f1, crc_skip == 0x14) ? base1 : base0;
 }
 
 static uint16_t block_crc(const struct gen4_save *s, uint32_t base, uint32_t size)
@@ -197,9 +206,9 @@ enum pksav_error gen4_load_save_from_file(const char *path, struct gen4_save *ou
     out->data = buf;
     out->size = GEN4_SAVE_SIZE;
     out->layout = k_layouts[game];
-    out->general_base = select_active(buf, 0, out->layout.general_size, out->layout.crc_footer_skip);
-    out->storage_base =
-        select_active(buf, out->layout.storage_start, out->layout.storage_size, out->layout.crc_footer_skip);
+    out->general_base = select_active(buf, 0, out->layout.general_size, out->layout.crc_footer_skip, GEN4_BLOCK_ID_GENERAL);
+    out->storage_base = select_active(buf, out->layout.storage_start, out->layout.storage_size,
+                                      out->layout.crc_footer_skip, GEN4_BLOCK_ID_STORAGE);
 
     return PKSAV_ERROR_NONE;
 }
