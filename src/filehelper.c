@@ -175,14 +175,15 @@ struct config_data read_key_from_config(void)
     char config_path[MAX_FILE_PATH_CHAR];
     snprintf(config_path, sizeof(config_path), "%s", home_dir());
     strcat(config_path, USR_DATA_DIR);
+    strcat(config_path, "\\config.ini");
 
-    // if USR_DATA_DIR does not exist, create it
+    // Create the folders and a default config if config.ini is missing. (This
+    // used to check only for the folder, so a folder made by hand or left
+    // behind without config.ini never got a save folder: "DIR_NOT_SET".)
     if (GetFileAttributes(config_path) == INVALID_FILE_ATTRIBUTES)
     {
         create_default_config();
     }
-
-    strcat(config_path, "\\config.ini");
 
     LPCSTR ini = config_path;
     // Static storage: struct config_data.save_file_dir is a pointer, and the
