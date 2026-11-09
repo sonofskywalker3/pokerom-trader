@@ -461,7 +461,7 @@ test:
 	$(CC) tests/events_apply_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/events_apply_test.exe
 	@./tests/events_apply_test.exe
 	@echo "== gen4_transfer_test =="
-	$(CC) tests/gen4_transfer_test.c src/gen4_transfer.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen3_species.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_transfer_test.exe
+	$(CC) tests/gen4_transfer_test.c src/gen4_transfer.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen3_species.c src/gen3_stats.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_transfer_test.exe
 	@./tests/gen4_transfer_test.exe
 	@echo "== gen4_trade_test =="
 	$(CC) tests/gen4_trade_test.c src/gen4_save.c src/gen4_pkmn.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_trade_test.exe
@@ -481,6 +481,9 @@ test:
 	@echo "== gen3_gift_test =="
 	$(CC) tests/gen3_gift_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/gen3_gift_test.exe
 	@./tests/gen3_gift_test.exe
+	@echo "== bugfix_test =="
+	$(CC) tests/bugfix_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/bugfix_test.exe
+	@./tests/bugfix_test.exe
 	@echo "== all tests passed =="
 
 clean:

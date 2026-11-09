@@ -153,7 +153,13 @@ static int test_transfer(void)
             int idx;
             if (b < 0)
             {
-                if (party->count == 0) break;
+                if (party->count <= 1)
+                {
+                    /* The source party may never be emptied: the lone mon is refused. */
+                    if (party->count == 1 && party->species[0] != 0xFD && gen3_species_obtainable(party->party[0].pc_data.species))
+                        CHECK(transfer_pkmn_to_gen3(&s, 0, &d) == error_transfer_last_pkmn && party->count == 1, "last party mon must be refused");
+                    break;
+                }
                 idx = 0;
             }
             else

@@ -22,6 +22,7 @@
 #include "gen4_pkmn.h"
 #include "gen4_stats.h"
 #include "gen3_species.h"
+#include "gen3_stats.h"
 #include <pksav.h>
 #include <stdio.h>
 #include <string.h>
@@ -188,6 +189,90 @@ static int test_egg_refusal(const char *g3, int idx, const char *g4)
     return 0;
 }
 
+/* Pal Park refuses HM-knowing mons and won't empty the Gen 3 party. */
+static int test_palpark_refusals(const char *g4)
+{
+    if (!have(g4)) { printf("SKIP test_palpark_refusals (%s absent)\n", g4); return 0; }
+    PokemonSave src, dst;
+    if (load_g3(FIRERED, &src) || load_g4(g4, &dst)) return 1;
+    gen4_set_party_count(&dst.save.gen4_save, 5);
+    uint32_t n0 = src.save.gba_save.pokemon_storage.p_party->count;
+    /* FireRed baseline slot 2 knows Fly (19) */
+    CHECK(transfer_pkmn_gen3_to_gen4(&src, 2, &dst) == error_transfer_hm_move, "HM mon refused");
+    CHECK(src.save.gba_save.pokemon_storage.p_party->count == n0, "source untouched (HM)");
+    CHECK(gen4_party_count(&dst.save.gen4_save) == 5, "destination untouched (HM)");
+    src.save.gba_save.pokemon_storage.p_party->count = 1; /* only slot 0 left */
+    CHECK(transfer_pkmn_gen3_to_gen4(&src, 0, &dst) == error_transfer_last_pkmn, "last party mon refused");
+    CHECK(gen4_party_count(&dst.save.gen4_save) == 5, "destination untouched (last mon)");
+    pksav_gba_free_save(&src.save.gba_save);
+    gen4_free_save(&dst.save.gen4_save);
+    printf("test_palpark_refusals PASS\n");
+    return 0;
+}
+
+/* Fields Pal Park carries over (PKHeX PK3.ConvertToPK4): the GEN 3 ability,
+ * ribbons, Pokerus, fateful flag, both HG/SS ball bytes, healed PP, and the
+ * nickname flag compared in Gen 3 encoding. */
+static int test_palpark_fidelity(const char *g4)
+{
+    if (!have(g4)) { printf("SKIP test_palpark_fidelity (%s absent)\n", g4); return 0; }
+    PokemonSave src, dst;
+    if (load_g3(EMERALD, &src) || load_g4(g4, &dst)) return 1;
+    gen4_set_party_count(&dst.save.gen4_save, 5);
+
+    struct pksav_gba_pc_pokemon *m = &src.save.gba_save.pokemon_storage.p_party->party[0].pc_data;
+    /* Make it a Hypno (#97, internal 97) with the ability bit set: Gen 3 Hypno
+     * only has Insomnia (15); Gen 4's second slot (Forewarn) must not leak in. */
+    m->blocks.growth.species = pksav_littleendian16(97);
+    uint32_t iv = pksav_littleendian32(m->blocks.misc.iv_egg_ability) | 0x80000000u;
+    m->blocks.misc.iv_egg_ability = pksav_littleendian32(iv);
+    /* Default name "HYPNO" -> not nicknamed */
+    static const uint8_t hypno[10] = {0xC2, 0xD3, 0xCA, 0xC8, 0xC9, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    memcpy(m->nickname, hypno, sizeof(hypno));
+    /* Cool x4 (Master), Beauty x2, Champion (15), World (26), fateful (31) */
+    uint32_t rib = 4u | (2u << 3) | (1u << 15) | (1u << 26) | (1u << 31);
+    m->blocks.misc.ribbons_obedience = pksav_littleendian32(rib);
+    m->blocks.misc.pokerus = 0x13;
+    for (int k = 0; k < 4; k++) m->blocks.attacks.move_pps[k] = 0; /* drained */
+    uint16_t origin = pksav_littleendian16(m->blocks.misc.origin_info);
+    uint8_t ball = (uint8_t)((origin & PKSAV_GBA_POKEMON_BALL_MASK) >> PKSAV_GBA_POKEMON_BALL_OFFSET);
+    uint8_t ppups = m->blocks.growth.pp_up;
+    uint16_t moves[4];
+    for (int k = 0; k < 4; k++) moves[k] = pksav_littleendian16(m->blocks.attacks.moves[k]);
+
+    CHECK(transfer_pkmn_gen3_to_gen4(&src, 0, &dst) == error_none, "fidelity transfer succeeds");
+    uint8_t dec[GEN4_PK4_PARTY_SIZE];
+    gen4_pk4_decrypt(gen4_party_slot_raw(&dst.save.gen4_save, 5), dec, true);
+
+    CHECK(dec[0x15] == 15, "Gen 3 ability kept (Insomnia, not Gen 4 Forewarn)");
+    uint32_t hoenn = (uint32_t)dec[0x3C] | ((uint32_t)dec[0x3D] << 8) | ((uint32_t)dec[0x3E] << 16) | ((uint32_t)dec[0x3F] << 24);
+    uint32_t want = 0xFu | (0x3u << 4) | (1u << 20) | (1u << 31);
+    CHECK(hoenn == want, "Hoenn ribbons converted");
+    CHECK(dec[0x40] & 1, "fateful encounter carried");
+    CHECK(dec[0x82] == 0x13, "Pokerus carried");
+    if (dst.save.gen4_save.game == GEN4_GAME_HGSS)
+        CHECK(dec[0x83] == ball && dec[0x86] == ball, "ball set at 0x83 and 0x86 (HG/SS)");
+    else
+        CHECK(dec[0x83] == ball, "ball set at 0x83");
+    for (int k = 0; k < 4; k++)
+    {
+        uint8_t ups = (uint8_t)((ppups >> (2 * k)) & 3);
+        uint8_t want_pp = moves[k] ? gen3_move_max_pp(moves[k], ups) : 0;
+        if (moves[k] == 105) want_pp = (uint8_t)(10 + (10 * 20 * ups) / 100); /* Recover: 10 PP in Gen 4 */
+        CHECK(dec[0x30 + k] == want_pp, "PP healed (Gen 4 max)");
+    }
+    uint32_t iv32 = (uint32_t)dec[0x38] | ((uint32_t)dec[0x39] << 8) | ((uint32_t)dec[0x3A] << 16) | ((uint32_t)dec[0x3B] << 24);
+    CHECK((iv32 >> 31) == 0, "default species name -> not nicknamed");
+    char nick[16] = {0};
+    gen4_decode_text(dec + 0x48, 11, nick);
+    CHECK(strcmp(nick, "HYPNO") == 0, "name glyphs transferred");
+
+    pksav_gba_free_save(&src.save.gba_save);
+    gen4_free_save(&dst.save.gen4_save);
+    printf("test_palpark_fidelity(%s) PASS\n", g4);
+    return 0;
+}
+
 /* A non-Gen-4 destination must be rejected without mutating anything. */
 static int test_wrong_gen(const char *g3a, const char *g3b)
 {
@@ -208,12 +293,15 @@ int main(void)
     /* party-append across all three Gen 4 formats + varied species */
     if (test_party_append(RUBY,    0, "saves/gen4/diamond.sav"))   return 1; /* DP   */
     if (test_party_append(EMERALD, 1, "saves/gen4/platinum.sav"))  return 1; /* Pt   */
-    if (test_party_append(FIRERED, 2, "saves/gen4/heartgold.sav")) return 1; /* HGSS */
+    if (test_party_append(FIRERED, 0, "saves/gen4/heartgold.sav")) return 1; /* HGSS */
     /* box-overflow path */
     if (test_box_overflow(FIRERED, 4, "saves/gen4/soulsilver.sav")) return 1;
     /* refusals */
     if (test_egg_refusal(RUBY, 0, "saves/gen4/pearl.sav")) return 1;
     if (test_wrong_gen(RUBY, FIRERED)) return 1;
+    if (test_palpark_refusals("saves/gen4/heartgold.sav")) return 1;
+    if (test_palpark_fidelity("saves/gen4/soulsilver.sav")) return 1;
+    if (test_palpark_fidelity("saves/gen4/diamond.sav")) return 1;
 
     printf("ALL PASS\n");
     return 0;
