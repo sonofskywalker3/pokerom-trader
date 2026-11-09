@@ -18,6 +18,48 @@
 #include <string.h>
 #include <wchar.h>
 
+// Primary game-data ranges and where the game mirrors each one (pret
+// pokegold/pokecrystal sram layout). Gold/Silver split the backup into five
+// pieces; Crystal keeps one contiguous copy.
+static const struct
+{
+    size_t start, end, backup;
+} GS_BACKUP_RANGES[] =
+{
+    {0x2009, 0x222E, 0x15C7},
+    {0x222F, 0x23D8, 0x3D96},
+    {0x23D9, 0x2855, 0x0C6B},
+    {0x2856, 0x2889, 0x7E39},
+    {0x288A, 0x2D68, 0x10E8},
+};
+
+void pksav_gen2_mirror_backup(
+    enum pksav_gen2_save_type save_type,
+    uint8_t* p_buffer
+)
+{
+    assert(p_buffer != NULL);
+
+    switch(save_type)
+    {
+        case PKSAV_GEN2_SAVE_TYPE_GS:
+            for(size_t i = 0; i < sizeof(GS_BACKUP_RANGES) / sizeof(GS_BACKUP_RANGES[0]); ++i)
+            {
+                memmove(&p_buffer[GS_BACKUP_RANGES[i].backup],
+                        &p_buffer[GS_BACKUP_RANGES[i].start],
+                        GS_BACKUP_RANGES[i].end - GS_BACKUP_RANGES[i].start + 1);
+            }
+            break;
+
+        case PKSAV_GEN2_SAVE_TYPE_CRYSTAL:
+            memmove(&p_buffer[0x1209], &p_buffer[0x2009], 0x2B82 - 0x2009 + 1);
+            break;
+
+        default:
+            break;
+    }
+}
+
 void pksav_gen2_get_save_checksums(
     enum pksav_gen2_save_type save_type,
     const uint8_t* p_buffer,
@@ -236,6 +278,11 @@ static void _pksav_gen2_set_save_pointers(
     p_internal->p_checksum2 = (uint16_t*)&p_buffer[
                                   p_offsets[PKSAV_GEN2_CHECKSUM2]
                               ];
+    // Daycare (Day-Care Man, Day-Care Lady, prebuilt egg)
+    p_gen2_save->p_daycare_data = (struct pksav_gen2_daycare_data*)(
+                                      &p_buffer[p_offsets[PKSAV_GEN2_DAYCARE_DATA]]
+                                  );
+
     // Mailbox
     p_gen2_save->p_mailbox = (struct pksav_gen2_mailbox *)(&p_buffer[p_offsets[PKSAV_GEN2_MAILBOX_DATA]]);
 
@@ -451,6 +498,13 @@ enum pksav_error pksav_gen2_save_save(
     enum pksav_error error = PKSAV_ERROR_NONE;
 
     struct pksav_gen2_save_internal* p_internal = p_gen2_save->p_internal;
+
+    // The game keeps a backup copy of the main game-data block and falls back
+    // to it if the primary checksum is bad. Refresh it from the primary so an
+    // edited save never carries a stale backup (layout verified byte-for-byte
+    // against game-written Gold and Crystal saves).
+    pksav_gen2_mirror_backup(p_gen2_save->save_type, p_internal->p_raw_save);
+
     pksav_gen2_get_save_checksums(
         p_gen2_save->save_type,
         p_internal->p_raw_save,

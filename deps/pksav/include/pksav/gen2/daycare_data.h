@@ -26,8 +26,9 @@
 
 struct pksav_gen2_daycare_pokemon_data
 {
-    uint8_t nickname[PKSAV_GEN2_POKEMON_NICKNAME_LENGTH];
-    uint8_t otname[PKSAV_GEN2_POKEMON_OTNAME_STORAGE_LENGTH];
+    // The game stores both names as 11 bytes (NAME_LENGTH), terminator included.
+    uint8_t nickname[PKSAV_GEN2_POKEMON_NICKNAME_LENGTH + 1];
+    uint8_t otname[PKSAV_GEN2_POKEMON_OTNAME_STORAGE_LENGTH + 1];
     struct pksav_gen2_pc_pokemon pokemon;
 };
 

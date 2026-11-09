@@ -15,7 +15,7 @@
 #define PKSAV_GS_CHECKSUM1 (0x2D69)
 #define PKSAV_GS_CHECKSUM2 (0x7E6D)
 
-#define PKSAV_CRYSTAL_CHECKSUM1 (0x2D02)
+#define PKSAV_CRYSTAL_CHECKSUM1 (0x2D0D) // pret sChecksum; was 0x2D02 (wrong)
 #define PKSAV_CRYSTAL_CHECKSUM2 (0x1F0D)
 
 struct pksav_gen2_save_internal
@@ -72,7 +72,7 @@ static const size_t GS_OFFSETS[] =
     0x0600, // Party Mail data
     0x071A, // Party Mail backup data
     0x0834, // Mailbox data
-    0x1306, // Daycare data
+    0x2AA8, // Daycare data (pret wDayCareMan; was 0x1306, inside the backup copy)
     0x2000, // Options
     0x2002, // Text box frame index
     0x2004, // Game Boy Printer brightness
@@ -111,7 +111,7 @@ static const size_t CRYSTAL_OFFSETS[] =
     0x0600, // Party Mail data
     0x071A, // Party Mail backup data
     0x0834, // Mailbox data
-    0x1C82, // Daycare data
+    0x2A83, // Daycare data (pret wDayCareMan; was 0x1C82, inside the backup copy)
     0x2000, // Options
     0x2002, // Text box frame index
     0x2004, // Game Boy Printer brightness
@@ -148,6 +148,12 @@ static const size_t CRYSTAL_OFFSETS[] =
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Copy the primary game-data block over the game's backup copy.
+void pksav_gen2_mirror_backup(
+    enum pksav_gen2_save_type save_type,
+    uint8_t* p_buffer
+);
 
 void pksav_gen2_get_save_checksums(
     enum pksav_gen2_save_type save_type,
