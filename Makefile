@@ -441,7 +441,7 @@ check:
 
 # Headless save tool (tools/pkcli.c): list/dex/move/trade/evolve/items/hold/
 # flag/daycare/transfer/denick/release/event/copy. Not part of the app.
-CORE_SRC = src/pksavhelper.c src/pkmn_evolutions.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen4_transfer.c src/gen_transfer.c src/gen2_items.c src/events.c
+CORE_SRC = src/pksavhelper.c src/pkmn_evolutions.c src/pksavfilehelper.c src/filehelper.c src/gen3_species.c src/gen3_stats.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen4_transfer.c src/gen_transfer.c src/gen2_items.c src/gen3_gift.c src/events.c
 .PHONY: pkcli
 pkcli:
 	$(CC) tools/pkcli.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tools/pkcli.exe
@@ -458,7 +458,7 @@ test:
 	$(CC) tests/pksav_flag_test.c $(TEST_INC) $(TEST_LIB) -o tests/pksav_flag_test.exe
 	@./tests/pksav_flag_test.exe
 	@echo "== events_apply_test =="
-	$(CC) tests/events_apply_test.c src/events.c $(TEST_INC) $(TEST_LIB) -o tests/events_apply_test.exe
+	$(CC) tests/events_apply_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/events_apply_test.exe
 	@./tests/events_apply_test.exe
 	@echo "== gen4_transfer_test =="
 	$(CC) tests/gen4_transfer_test.c src/gen4_transfer.c src/gen4_save.c src/gen4_pkmn.c src/gen4_stats.c src/gen3_species.c $(TEST_INC) $(TEST_LIB) -o tests/gen4_transfer_test.exe
@@ -478,6 +478,9 @@ test:
 	@echo "== gen2_gen3_test =="
 	$(CC) tests/gen2_gen3_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/gen2_gen3_test.exe
 	@./tests/gen2_gen3_test.exe
+	@echo "== gen3_gift_test =="
+	$(CC) tests/gen3_gift_test.c $(CORE_SRC) $(TEST_INC) $(TEST_LIB) -o tests/gen3_gift_test.exe
+	@./tests/gen3_gift_test.exe
 	@echo "== all tests passed =="
 
 clean:

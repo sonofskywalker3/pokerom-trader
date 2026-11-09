@@ -212,6 +212,7 @@ typedef enum
     error_evolve_pkmn,
     error_transfer_not_obtainable,
     error_transfer_no_space,
+    error_event_already_received,
 } pksavhelper_error;
 
 #endif // COMMON_H

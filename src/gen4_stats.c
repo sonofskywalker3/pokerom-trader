@@ -706,6 +706,17 @@ static const uint8_t gen4_ability_table[GEN4_NATIONAL_DEX_MAX + 1][2] = {
     [493]={121,121},
 };
 
+bool gen3_species_uses_ability_bit(uint16_t national_dex)
+{
+    if (national_dex == 210 || national_dex == 329 || national_dex == 330)
+    {
+        return true; // Granbull, Vibrava, Flygon
+    }
+    uint8_t a1 = gen4_ability_id(national_dex, 0);
+    uint8_t a2 = gen4_ability_id(national_dex, 1);
+    return a2 != 0 && a2 != a1;
+}
+
 uint8_t gen4_ability_id(uint16_t national_dex, int slot)
 {
     if (national_dex < 1 || national_dex > GEN4_NATIONAL_DEX_MAX || slot < 0 || slot > 1)

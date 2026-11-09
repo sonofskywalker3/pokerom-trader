@@ -3,6 +3,7 @@
  * Distributed under the MIT License (MIT).
  */
 #include "events.h"
+#include "gen3_gift.h"
 #include <pksav.h>
 
 // Gen 2 (Crystal) key item id.
@@ -73,6 +74,16 @@ static const struct pkmn_event EVENTS[] = {
      {FLAG_E_OLD_SEA_MAP, 0, 0},
      "Old Sea Map", "Mew",
      "Board the S.S. Tidal and sail to Faraway Island."},
+
+    // --- Gen 3: Pokemon distributions (no in-game location exists) ---
+    // US 10th Anniversary "Journey Across America" Celebi (2006): the only
+    // English Gen 3 Celebi. Any Gen 3 game could receive it.
+    {SAVE_GENERATION_3,
+     (uint8_t)((1u << PKSAV_GBA_SAVE_TYPE_RS) | (1u << PKSAV_GBA_SAVE_TYPE_EMERALD) | (1u << PKSAV_GBA_SAVE_TYPE_FRLG)),
+     0, {0, 0, 0},
+     "10th Anniversary Celebi", "Celebi",
+     "Celebi Lv70 (OT 10 ANIV, ID 00010) arrives in your party, or the PC if the party is full.",
+     &GEN3_GIFT_10ANIV_CELEBI},
 };
 
 static int save_type_of(const PokemonSave *pkmn_save)
@@ -201,6 +212,14 @@ pksavhelper_error apply_event(PokemonSave *pkmn_save, const struct pkmn_event *e
     if (ev->gen != pkmn_save->save_generation_type)
     {
         return error_swap_pkmn;
+    }
+    if (ev->gift != NULL)
+    {
+        if (gen3_gift_already_received(pkmn_save, ev->gift))
+        {
+            return error_event_already_received;
+        }
+        return gen3_gift_give(pkmn_save, ev->gift);
     }
     bool ok = (ev->gen == SAVE_GENERATION_2)
                   ? gen2_add_key_item(pkmn_save, ev->item_id)

@@ -56,6 +56,8 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     static bool show_saving_icon = false;
     static bool show_applied_toast = false;
     static bool show_error_toast = false;
+    static bool applied_gift = false;
+    static pksavhelper_error last_error = error_none;
 
     if (needs_init)
     {
@@ -120,15 +122,25 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     {
         const struct pkmn_event *ev = events[selected];
         shadow_text(ev->ticket, (int)info_rec.x + 10, (int)info_rec.y + 12, 22, COLOR_PKMN_YELLOW);
-        shadow_text(TextFormat("Unlocks: %s", ev->pokemon), (int)info_rec.x + 10, (int)info_rec.y + 46, 20, WHITE);
-        shadow_text("After adding the ticket, in-game:", (int)info_rec.x + 10, (int)info_rec.y + 84, 16, WHITE);
-        draw_wrapped(ev->location, (int)info_rec.x + 10, (int)info_rec.y + 108, (int)info_rec.width - 20, 18, WHITE);
-        shadow_text("The game creates a legit Pokemon.", (int)info_rec.x + 10, (int)info_rec.y + 240, 14, (Color){200, 255, 200, 255});
+        if (ev->gift)
+        {
+            shadow_text(TextFormat("Distribution: %s", ev->pokemon), (int)info_rec.x + 10, (int)info_rec.y + 46, 20, WHITE);
+            shadow_text("No in-game location exists. Receiving it:", (int)info_rec.x + 10, (int)info_rec.y + 84, 16, WHITE);
+            draw_wrapped(ev->location, (int)info_rec.x + 10, (int)info_rec.y + 108, (int)info_rec.width - 20, 18, WHITE);
+            shadow_text("Generated exactly like the event cartridge. Once per save.", (int)info_rec.x + 10, (int)info_rec.y + 240, 14, (Color){200, 255, 200, 255});
+        }
+        else
+        {
+            shadow_text(TextFormat("Unlocks: %s", ev->pokemon), (int)info_rec.x + 10, (int)info_rec.y + 46, 20, WHITE);
+            shadow_text("After adding the ticket, in-game:", (int)info_rec.x + 10, (int)info_rec.y + 84, 16, WHITE);
+            draw_wrapped(ev->location, (int)info_rec.x + 10, (int)info_rec.y + 108, (int)info_rec.width - 20, 18, WHITE);
+            shadow_text("The game creates a legit Pokemon.", (int)info_rec.x + 10, (int)info_rec.y + 240, 14, (Color){200, 255, 200, 255});
+        }
     }
     else if (n > 0)
     {
         shadow_text("Select an event to re-issue", (int)info_rec.x + 10, (int)info_rec.y + 20, 18, WHITE);
-        shadow_text("its ticket.", (int)info_rec.x + 10, (int)info_rec.y + 44, 18, WHITE);
+        shadow_text("its ticket or Pokemon.", (int)info_rec.x + 10, (int)info_rec.y + 44, 18, WHITE);
     }
 
     // Bottom bar
@@ -143,7 +155,8 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     bool can_apply = selected >= 0 && selected < n;
     const Rectangle apply_button_rec = (Rectangle){NEXT_BUTTON_X - 25, NEXT_BUTTON_Y + 8, BUTTON_WIDTH + 20, BUTTON_HEIGHT};
     bool apply_hover = CheckCollisionPointRec(GetMousePosition(), apply_button_rec);
-    DrawText("Add Ticket", (int)apply_button_rec.x + 5, (int)apply_button_rec.y + 10, 20, can_apply ? (apply_hover ? LIGHTGRAY : BLACK) : LIGHTGRAY);
+    bool sel_gift = can_apply && events[selected]->gift != NULL;
+    DrawText(sel_gift ? "Receive" : "Add Ticket", (int)apply_button_rec.x + 5, (int)apply_button_rec.y + 10, 20, can_apply ? (apply_hover ? LIGHTGRAY : BLACK) : LIGHTGRAY);
 
     if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON))
     {
@@ -162,10 +175,12 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
                 create_trainer(pkmn_save, trainer);
                 show_saving_icon = true;
                 show_applied_toast = true;
+                applied_gift = events[selected]->gift != NULL;
             }
             else
             {
-                show_error_toast = true; // Key Items pocket full / unsupported save
+                show_error_toast = true;
+                last_error = e;
             }
         }
     }
@@ -176,11 +191,14 @@ void draw_events(PokemonSave *pkmn_save, char *save_path, struct trainer_info *t
     }
     if (show_applied_toast)
     {
-        show_applied_toast = !draw_toast_message("Ticket added! Now play to the spot.", TOAST_MEDIUM, TOAST_SUCCESS);
+        show_applied_toast = !draw_toast_message((char *)(applied_gift ? "Received! Check your party or PC." : "Ticket added! Now play to the spot."), TOAST_MEDIUM, TOAST_SUCCESS);
     }
     if (show_error_toast)
     {
-        show_error_toast = !draw_toast_message("Couldn't apply - Key Items pocket full", TOAST_SHORT, TOAST_ERROR);
+        show_error_toast = !draw_toast_message((char *)(last_error == error_event_already_received ? "This save already received it" :
+                                               last_error == error_transfer_no_space ? "Party and PC are full" :
+                                                                                       "Couldn't apply - Key Items pocket full"),
+                                               TOAST_SHORT, TOAST_ERROR);
     }
 
     end_virtual_frame();

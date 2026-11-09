@@ -212,7 +212,9 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
     out->personality = pksav_littleendian32(pid);
     out->ot_id.pid = pksav_littleendian16(s->ot_id);
     out->ot_id.sid = 0;
-    out->language = 0x02; // English
+    // Low byte: language (2 = English). High byte: sanity flags; bit 1 is
+    // "has species", which every real mon has set.
+    out->language = pksav_littleendian16(0x0202);
 
     // Text: import from the source gen, re-export in Gen 3 encoding.
     char tmp[16];
@@ -257,7 +259,7 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
     ivbits |= (uint32_t)((dv[PKSAV_GB_IV_SPECIAL] * 2) & 0x1F) << 25; // Sp.Def (shared Special DV)
     // Gen 3 only uses PID bit 0 for species that have a second ability; a
     // single-ability species with the bit set would end up with no ability.
-    if ((pid & 1u) && gen4_ability_id(s->dex, 1) != 0)
+    if ((pid & 1u) && gen3_species_uses_ability_bit(s->dex))
     {
         ivbits |= (1u << 31); // second ability slot
     }

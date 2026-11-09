@@ -199,7 +199,7 @@ static int test_transfer(void)
             uint16_t item = pksav_littleendian16(g->blocks.growth.held_item);
             CHECK(item == (src.pc_data.held_item ? gen2_item_to_gen3(src.pc_data.held_item) : 0), "#%u item", dex);
             uint32_t iv = pksav_littleendian32(g->blocks.misc.iv_egg_ability);
-            if (gen4_ability_id(dex, 1) == 0) CHECK(!(iv >> 31), "#%u claims a second ability it lacks", dex);
+            if (!gen3_species_uses_ability_bit(dex)) CHECK(!(iv >> 31), "#%u claims a second ability it lacks", dex);
             else CHECK((int)(iv >> 31) == (int)(pid & 1), "#%u ability bit != PID bit 0", dex);
             CHECK(g->blocks.misc.met_location == 0xFE, "met location");
             bool seen, owned;
