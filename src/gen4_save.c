@@ -52,18 +52,23 @@ static bool footer_magic_ok(uint32_t m)
 
 /* Identify the game from the (general_size, storage_size) signature: a valid
  * general footer (magic + matching size field) must sit at general_size-8 in
- * partition 0. */
+ * either partition. The games write their FIRST save to partition 1, so a
+ * game saved only once has nothing in partition 0 yet. */
 static enum gen4_game detect_game(const uint8_t *data)
 {
     const enum gen4_game games[] = {GEN4_GAME_DP, GEN4_GAME_PT, GEN4_GAME_HGSS};
-    for (size_t i = 0; i < sizeof(games) / sizeof(games[0]); i++)
+    for (uint32_t part = 0; part < 2; part++)
     {
-        const struct gen4_layout *L = &k_layouts[games[i]];
-        uint32_t magic_off = L->general_size - 8;
-        uint32_t size_off = L->general_size - 0x0C;
-        if (footer_magic_ok(rd32(data + magic_off)) && rd32(data + size_off) == L->general_size)
+        for (size_t i = 0; i < sizeof(games) / sizeof(games[0]); i++)
         {
-            return games[i];
+            const struct gen4_layout *L = &k_layouts[games[i]];
+            uint32_t base = part * GEN4_PARTITION_SIZE;
+            uint32_t magic_off = base + L->general_size - 8;
+            uint32_t size_off = base + L->general_size - 0x0C;
+            if (footer_magic_ok(rd32(data + magic_off)) && rd32(data + size_off) == L->general_size)
+            {
+                return games[i];
+            }
         }
     }
     return GEN4_GAME_NONE;
@@ -91,12 +96,31 @@ static bool footer_b_newer(const uint8_t *a_footer, const uint8_t *b_footer)
     return false; /* tie -> keep primary (a) */
 }
 
+/* A block copy is intact if its footer carries the magic and its own size and
+ * the stored CRC matches the data, which is how the games decide on load. */
+static bool block_intact(const uint8_t *data, uint32_t base, uint32_t block_size, uint32_t crc_skip)
+{
+    const uint8_t *end = data + base + block_size;
+    return footer_magic_ok(rd32(end - 0x08)) && rd32(end - 0x0C) == block_size &&
+           rd16(end - 0x02) == gen4_crc16_ccitt(data + base, block_size - crc_skip);
+}
+
 /* Absolute offset of the active copy of a block that lives at `block_off_in_part`
- * within each partition and is `block_size` long. */
-static uint32_t select_active(const uint8_t *data, uint32_t block_off_in_part, uint32_t block_size)
+ * within each partition and is `block_size` long. Like the games, a copy whose
+ * CRC doesn't match (a save interrupted mid-write) loses to an intact one even
+ * if its counter is newer; otherwise loading it and re-saving would stamp a
+ * fresh CRC on the damaged data. If neither copy is intact, fall back to the
+ * counters alone. */
+static uint32_t select_active(const uint8_t *data, uint32_t block_off_in_part, uint32_t block_size, uint32_t crc_skip)
 {
     uint32_t base0 = block_off_in_part;
     uint32_t base1 = GEN4_PARTITION_SIZE + block_off_in_part;
+    bool ok0 = block_intact(data, base0, block_size, crc_skip);
+    bool ok1 = block_intact(data, base1, block_size, crc_skip);
+    if (ok0 != ok1)
+    {
+        return ok1 ? base1 : base0;
+    }
     const uint8_t *f0 = data + base0 + block_size - 0x14;
     const uint8_t *f1 = data + base1 + block_size - 0x14;
     return footer_b_newer(f0, f1) ? base1 : base0;
@@ -173,9 +197,9 @@ enum pksav_error gen4_load_save_from_file(const char *path, struct gen4_save *ou
     out->data = buf;
     out->size = GEN4_SAVE_SIZE;
     out->layout = k_layouts[game];
-    out->general_base = select_active(buf, 0, out->layout.general_size);
+    out->general_base = select_active(buf, 0, out->layout.general_size, out->layout.crc_footer_skip);
     out->storage_base =
-        select_active(buf, out->layout.storage_start, out->layout.storage_size);
+        select_active(buf, out->layout.storage_start, out->layout.storage_size, out->layout.crc_footer_skip);
 
     return PKSAV_ERROR_NONE;
 }
@@ -409,6 +433,7 @@ enum pksav_error gen4_save_save(const char *path, struct gen4_save *save)
     if (!f)
         return PKSAV_ERROR_FILE_IO;
     size_t wrote = fwrite(save->data, 1, save->size, f);
-    fclose(f);
-    return (wrote == save->size) ? PKSAV_ERROR_NONE : PKSAV_ERROR_FILE_IO;
+    // fclose flushes the buffered tail: a failure there means a short file.
+    bool closed = fclose(f) == 0;
+    return (wrote == save->size && closed) ? PKSAV_ERROR_NONE : PKSAV_ERROR_FILE_IO;
 }
