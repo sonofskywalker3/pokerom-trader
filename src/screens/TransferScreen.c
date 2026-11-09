@@ -81,13 +81,18 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
         }
         Color tc = selected == i ? BLACK : (ok ? WHITE : (Color){200, 200, 200, 130});
         DrawText(v.nickname, (int)row.x + 8, (int)row.y + 4, 20, tc);
+        // Right-align the level, and put the "can't transfer" mark left of it
+        // (it used to be drawn on top of a three-digit level).
+        int right_x = (int)(row.x + row.width) - 6;
         if (v.level > 0)
         {
-            DrawText(TextFormat("Lv%u", v.level), (int)(row.x + row.width) - 60, (int)row.y + 4, 20, tc);
+            const char *lv = TextFormat("Lv%u", v.level);
+            right_x -= MeasureText(lv, 20);
+            DrawText(lv, right_x, (int)row.y + 4, 20, tc);
         }
         if (!ok)
         {
-            DrawText("x", (int)(row.x + row.width) - 20, (int)row.y + 4, 20, (Color){255, 120, 120, 255});
+            DrawText("x", right_x - 18, (int)row.y + 4, 20, (Color){255, 120, 120, 255});
         }
         if (hovered && IsMouseButtonPressed(MOUSE_LEFT_BUTTON))
         {
