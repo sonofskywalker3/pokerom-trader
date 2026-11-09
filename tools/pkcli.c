@@ -10,6 +10,12 @@
  *   pkcli release <save> <party|box> <box#> <idx>        remove a mon, compact the container
  *   pkcli denick <save>                                   reset all nicknames to species names (Gen 1/2)
  *   pkcli event  <save> [idx]                             list this game's events, or grant one's ticket item
+ *   pkcli items <save>                                    bag, PC and held items (Gen 2)
+ *   pkcli hold  <save> <party|box> <box#> <idx> <item|none> [--conjure]
+ *                                                         give/take a held item, game-style (Gen 2)
+ *   pkcli flag  <save> <id> [0|1]                         read/set an event flag (Crystal, Gen 3)
+ *   pkcli daycare <save>                                  show the Day-Care (Gen 2)
+ *   pkcli transfer <src> <party|box> <box#> <idx> <dst>   move a Gen 1/2 mon up to Gen 3
  *   pkcli copy  <src> <party|box> <box#> <idx> <dst> <dstBox#>
  *                                                         one-way copy into dst box (Gen 1/Gen 2 same gen, or Gen 1 -> Gen 2 Time Capsule style)
  *
@@ -20,6 +26,8 @@
 #include "pksavfilehelper.h"
 #include "gen3_species.h"
 #include "events.h"
+#include "gen2_items.h"
+#include "gen_transfer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +53,21 @@ static void print_entry(const PokemonSave *sav, enum bills_pc_location loc, int 
     if (!v.occupied)
         return;
     const char *name = v.dex ? gen3_national_dex_name(v.dex) : "?";
+    /* Gen 2 marks an egg with 0xFD in the species list; the struct holds the
+     * species it will hatch into. */
+    if (sav->save_generation_type == SAVE_GENERATION_2)
+    {
+        const struct pksav_gen2_pokemon_storage *st = &sav->save.gen2_save.pokemon_storage;
+        const uint8_t *list = (loc == BILLS_PC_LOC_PARTY) ? st->p_party->species : st->pp_boxes[box]->species;
+        if (list[idx] == 0xFD)
+        {
+            if (loc == BILLS_PC_LOC_PARTY)
+                printf("party    slot %2d: EGG (hatches #%03u %s)\n", idx, v.dex, name);
+            else
+                printf("box %2d   slot %2d: EGG (hatches #%03u %s)\n", box, idx, v.dex, name);
+            return;
+        }
+    }
     if (loc == BILLS_PC_LOC_PARTY)
         printf("party    slot %2d: #%03u %-11s L%-3u si=%-3u nick=%s\n", idx, v.dex, name, v.level, v.species, v.nickname);
     else
@@ -521,6 +544,243 @@ static int cmd_release(const char *path, const char *loc_s, int box, int idx)
     return 0;
 }
 
+
+/* ---- Gen 2 items --------------------------------------------------------- */
+
+static void print_pocket(const char *label, const struct pksav_gb_item *items, uint8_t count)
+{
+    printf("%s (%u):\n", label, count);
+    for (int i = 0; i < count; i++)
+        printf("  0x%02X %-13s x%u\n", items[i].index, gen2_item_name(items[i].index), items[i].count);
+}
+
+/* Bag, PC and held items of a Gen 2 save. Held items show their Gen 3 fate. */
+static int cmd_items(const char *path)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    if (sav.save_generation_type != SAVE_GENERATION_2)
+    {
+        fprintf(stderr, "ERROR: items supports Gen 2 saves only\n");
+        return 1;
+    }
+    bills_pc_normalize_current_box(&sav);
+    struct pksav_gen2_item_storage *st = &sav.save.gen2_save.item_storage;
+    struct pksav_gen2_item_bag *bag = st->p_item_bag;
+    print_pocket("bag items", bag->item_pocket.items, bag->item_pocket.count);
+    print_pocket("bag balls", bag->ball_pocket.items, bag->ball_pocket.count);
+    printf("key items (%u):", bag->key_item_pocket.count);
+    for (int i = 0; i < bag->key_item_pocket.count; i++)
+        printf(" %s;", gen2_item_name(bag->key_item_pocket.item_indices[i]));
+    printf("\nTMs:");
+    for (int i = 0; i < PKSAV_GEN2_TM_COUNT; i++)
+        if (bag->tmhm_pocket.tm_count[i]) printf(" TM%02d x%u", i + 1, bag->tmhm_pocket.tm_count[i]);
+    printf("\n");
+    print_pocket("PC items", st->p_item_pc->items, st->p_item_pc->count);
+    printf("held:\n");
+    int nb = bills_pc_num_boxes(&sav);
+    for (int b = -1; b < nb; b++)
+    {
+        enum bills_pc_location loc = b < 0 ? BILLS_PC_LOC_PARTY : BILLS_PC_LOC_BOX;
+        struct copy_cont c;
+        if (!copy_cont_init(&sav, loc, b < 0 ? 0 : b, &c)) continue;
+        for (int i = 0; i < *c.count; i++)
+        {
+            const struct pksav_gen2_pc_pokemon *m = (const struct pksav_gen2_pc_pokemon *)(c.entries + i * c.stride);
+            if (!m->held_item) continue;
+            uint16_t g3 = gen2_item_to_gen3(m->held_item);
+            printf("  %s %2d slot %2d: #%03u %-11s holds 0x%02X %-13s gen3=%s\n",
+                   b < 0 ? "party" : "box  ", b < 0 ? 0 : b, i, m->species,
+                   gen3_national_dex_name(m->species), m->held_item, gen2_item_name(m->held_item),
+                   g3 ? "kept" : (gen2_item_is_berry(m->held_item) ? "dropped (berry)" : "dropped"));
+        }
+    }
+    return 0;
+}
+
+/* Take one of `item` out of a pocket list; returns 1 if found. */
+static int take_from_list(struct pksav_gb_item *items, uint8_t *count, uint8_t item)
+{
+    for (int i = 0; i < *count; i++)
+    {
+        if (items[i].index != item) continue;
+        if (--items[i].count == 0)
+        {
+            for (int k = i; k < *count - 1; k++) items[k] = items[k + 1];
+            (*count)--;
+            items[*count].index = 0xFF; /* terminator follows the last entry */
+            items[*count].count = 0;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+/* Add one of `item`; returns 0 when the list is full. */
+static int add_to_list(struct pksav_gb_item *items, uint8_t *count, int cap, uint8_t item)
+{
+    for (int i = 0; i < *count; i++)
+        if (items[i].index == item && items[i].count < 99) { items[i].count++; return 1; }
+    if (*count >= cap) return 0;
+    items[*count].index = item;
+    items[*count].count = 1;
+    (*count)++;
+    if (*count < cap) { items[*count].index = 0xFF; items[*count].count = 0; }
+    return 1;
+}
+
+static int is_ball(uint8_t item)
+{
+    return item == 0x01 || item == 0x02 || item == 0x04 || item == 0x05 || item == 0x9D ||
+           item == 0x9F || item == 0xA0 || item == 0xA1 || item == 0xA4 || item == 0xA5 ||
+           item == 0xA6 || item == 0xB1;
+}
+
+/* Give a mon an item the way the game does: the item comes out of the bag
+ * (or the PC, which the game can't do directly but which is the same item),
+ * and whatever it held before goes back into the bag (PC if the bag is full).
+ * Pass "none" to just take its item. --conjure skips the bag check. */
+static int cmd_hold(const char *path, const char *loc_s, int box, int idx, const char *item_s, int conjure)
+{
+    PokemonSave sav;
+    enum bills_pc_location loc;
+    if (!parse_loc(loc_s, &loc)) { fprintf(stderr, "ERROR: location must be 'party' or 'box'\n"); return 1; }
+    if (!load_or_die(path, &sav)) return 1;
+    if (sav.save_generation_type != SAVE_GENERATION_2) { fprintf(stderr, "ERROR: hold supports Gen 2 saves only\n"); return 1; }
+    uint8_t item = strcmp(item_s, "none") == 0 ? 0 : (uint8_t)strtol(item_s, NULL, 0);
+    bills_pc_normalize_current_box(&sav);
+    struct copy_cont c;
+    if (!copy_cont_init(&sav, loc, box, &c) || idx < 0 || idx >= *c.count) { fprintf(stderr, "ERROR: empty slot\n"); return 1; }
+    struct pksav_gen2_pc_pokemon *m = (struct pksav_gen2_pc_pokemon *)(c.entries + idx * c.stride);
+    if (c.species[idx] == 0xFD) { fprintf(stderr, "ERROR: that's an egg\n"); return 1; }
+    if (bills_pc_slot_holds_mail(&sav, loc, box, idx)) { fprintf(stderr, "ERROR: it holds mail; take the mail off in-game\n"); return 1; }
+    struct pksav_gen2_item_storage *st = &sav.save.gen2_save.item_storage;
+    struct pksav_gen2_item_bag *bag = st->p_item_bag;
+    if (item)
+    {
+        if (item >= 0xBF) { fprintf(stderr, "ERROR: TMs/HMs can't be held\n"); return 1; }
+        int got = conjure ||
+                  take_from_list(bag->item_pocket.items, &bag->item_pocket.count, item) ||
+                  take_from_list(bag->ball_pocket.items, &bag->ball_pocket.count, item) ||
+                  take_from_list(st->p_item_pc->items, &st->p_item_pc->count, item);
+        if (!got) { fprintf(stderr, "ERROR: no %s in the bag or PC (use --conjure to create one)\n", gen2_item_name(item)); return 1; }
+    }
+    uint8_t old = m->held_item;
+    if (old)
+    {
+        int ok = is_ball(old)
+                     ? add_to_list(bag->ball_pocket.items, &bag->ball_pocket.count, PKSAV_GEN2_BALL_POCKET_SIZE, old)
+                     : add_to_list(bag->item_pocket.items, &bag->item_pocket.count, PKSAV_GEN2_ITEM_POCKET_SIZE, old);
+        if (!ok && !add_to_list(st->p_item_pc->items, &st->p_item_pc->count, PKSAV_GEN2_ITEM_PC_SIZE, old))
+        {
+            fprintf(stderr, "ERROR: bag and PC are both full; nowhere to put %s\n", gen2_item_name(old));
+            return 1;
+        }
+    }
+    m->held_item = item;
+    bills_pc_flush_current_box(&sav);
+    if (save_savefile_to_path(&sav, (char *)path) != error_none) { fprintf(stderr, "ERROR: write failed\n"); return 1; }
+    printf("%s %d slot %d #%03u %s: %s -> %s\n", loc_s, box, idx, m->species, gen3_national_dex_name(m->species),
+           old ? gen2_item_name(old) : "(nothing)", item ? gen2_item_name(item) : "(nothing)");
+    return 0;
+}
+
+/* ---- event flags --------------------------------------------------------- */
+
+static int cmd_flag(const char *path, int id, int value)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    bool cur = false;
+    enum pksav_error e;
+    if (sav.save_generation_type == SAVE_GENERATION_2)
+        e = pksav_gen2_save_get_event_flag(&sav.save.gen2_save, (uint16_t)id, &cur);
+    else if (sav.save_generation_type == SAVE_GENERATION_3)
+        e = pksav_gba_save_get_flag(&sav.save.gba_save, (uint16_t)id, &cur);
+    else { fprintf(stderr, "ERROR: flags supported for Crystal and Gen 3\n"); return 1; }
+    if (e != PKSAV_ERROR_NONE) { fprintf(stderr, "ERROR: can't read flag %d (wrong game or out of range)\n", id); return 1; }
+    if (value < 0) { printf("flag %d = %d\n", id, cur); return 0; }
+    if (sav.save_generation_type == SAVE_GENERATION_2)
+        e = pksav_gen2_save_set_event_flag(&sav.save.gen2_save, (uint16_t)id, value != 0);
+    else
+        e = pksav_gba_save_set_flag(&sav.save.gba_save, (uint16_t)id, value != 0);
+    if (e != PKSAV_ERROR_NONE || save_savefile_to_path(&sav, (char *)path) != error_none) { fprintf(stderr, "ERROR: write failed\n"); return 1; }
+    printf("flag %d: %d -> %d\n", id, cur, value != 0);
+    return 0;
+}
+
+/* ---- daycare ------------------------------------------------------------- */
+
+static void print_daycare_mon(const char *who, const struct pksav_gen2_daycare_pokemon_data *d)
+{
+    char nick[16];
+    pksav_gen2_import_text(d->nickname, nick, 10);
+    printf("  %-5s #%03u %-11s L%-3u nick=%s item=%s\n", who, d->pokemon.species,
+           gen3_national_dex_name(d->pokemon.species), d->pokemon.level, nick, gen2_item_name(d->pokemon.held_item));
+}
+
+static int cmd_daycare(const char *path)
+{
+    PokemonSave sav;
+    if (!load_or_die(path, &sav)) return 1;
+    if (sav.save_generation_type != SAVE_GENERATION_2) { fprintf(stderr, "ERROR: daycare supports Gen 2 saves only\n"); return 1; }
+    const struct pksav_gen2_daycare_data *d = sav.save.gen2_save.p_daycare_data;
+    printf("daycare man 0x%02X, lady 0x%02X, steps to egg %u\n", d->daycare_man_fields, d->daycare_lady_fields, d->steps_to_egg);
+    if (d->daycare_man_fields & PKSAV_GEN2_DAYCARE_MAN_POKEMON_PRESENT_MASK) print_daycare_mon("man", &d->stored_pokemon1_data);
+    else printf("  man   (empty)\n");
+    if (d->daycare_lady_fields & PKSAV_GEN2_DAYCARE_LADY_POKEMON_PRESENT_MASK) print_daycare_mon("lady", &d->stored_pokemon2_data);
+    else printf("  lady  (empty)\n");
+    if (d->daycare_man_fields & PKSAV_GEN2_DAYCARE_MAN_IS_EGG_READY_MASK) print_daycare_mon("egg", &d->egg_pokemon_data);
+    return 0;
+}
+
+/* ---- forward transfer ---------------------------------------------------- */
+
+/* Move (not copy) a Gen 1/2 mon up to a Gen 3 save, the same engine the
+ * app's Transfer screen uses. A boxed mon is withdrawn to the party first. */
+static int cmd_transfer(const char *src_path, const char *loc_s, int box, int idx, const char *dst_path)
+{
+    PokemonSave s, d;
+    enum bills_pc_location loc;
+    if (!parse_loc(loc_s, &loc)) { fprintf(stderr, "ERROR: location must be 'party' or 'box'\n"); return 1; }
+    if (!load_or_die(src_path, &s) || !load_or_die(dst_path, &d)) return 1;
+    if ((s.save_generation_type != SAVE_GENERATION_1 && s.save_generation_type != SAVE_GENERATION_2) ||
+        d.save_generation_type != SAVE_GENERATION_3)
+    {
+        fprintf(stderr, "ERROR: transfer goes from a Gen 1/2 save to a Gen 3 save\n");
+        return 1;
+    }
+    bills_pc_normalize_current_box(&s);
+    int party_idx = idx;
+    if (loc == BILLS_PC_LOC_BOX)
+    {
+        int n = bills_pc_container_count(&s, BILLS_PC_LOC_PARTY, 0);
+        if (n >= bills_pc_party_capacity(&s)) { fprintf(stderr, "ERROR: source party is full; can't withdraw\n"); return 1; }
+        struct bills_pc_slot from = {BILLS_PC_LOC_BOX, box, idx}, to = {BILLS_PC_LOC_PARTY, 0, n};
+        if (bills_pc_move_pkmn(&s, from, to) != error_none) { fprintf(stderr, "ERROR: withdraw failed\n"); return 1; }
+        party_idx = n;
+    }
+    struct bills_pc_entry_view v;
+    bills_pc_get_view(&s, BILLS_PC_LOC_PARTY, 0, party_idx, &v);
+    uint8_t held = 0;
+    if (s.save_generation_type == SAVE_GENERATION_2)
+        held = s.save.gen2_save.pokemon_storage.p_party->party[party_idx].pc_data.held_item;
+    pksavhelper_error e = transfer_pkmn_to_gen3(&s, (uint8_t)party_idx, &d);
+    if (e != error_none)
+    {
+        fprintf(stderr, "ERROR: #%03u %s can't go to Gen 3 (%s)\n", v.dex, gen3_national_dex_name(v.dex),
+                e == error_transfer_not_obtainable ? "egg or not obtainable in Gen 3" :
+                e == error_transfer_no_space ? "Gen 3 party and boxes are full" : "bad slot");
+        return 1;
+    }
+    bills_pc_flush_current_box(&s);
+    if (save_savefile_to_path(&d, (char *)dst_path) != error_none) { fprintf(stderr, "ERROR: write dst\n"); return 1; }
+    if (save_savefile_to_path(&s, (char *)src_path) != error_none) { fprintf(stderr, "ERROR: write src\n"); return 1; }
+    printf("transferred: #%03u %s L%u item=%s%s\n", v.dex, gen3_national_dex_name(v.dex), v.level,
+           held ? gen2_item_name(held) : "-", held && !gen2_item_to_gen3(held) ? " (dropped: no Gen 3 equivalent)" : "");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "list") == 0)
@@ -543,6 +803,16 @@ int main(int argc, char **argv)
         return cmd_event(argv[2], argc == 4 ? atoi(argv[3]) : -1);
     if (argc == 4 && strcmp(argv[1], "evolve") == 0)
         return cmd_evolve(argv[2], atoi(argv[3]));
+    if (argc >= 3 && strcmp(argv[1], "items") == 0)
+        return cmd_items(argv[2]);
+    if ((argc == 7 || argc == 8) && strcmp(argv[1], "hold") == 0)
+        return cmd_hold(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), argv[6], argc == 8 && strcmp(argv[7], "--conjure") == 0);
+    if ((argc == 4 || argc == 5) && strcmp(argv[1], "flag") == 0)
+        return cmd_flag(argv[2], atoi(argv[3]), argc == 5 ? atoi(argv[4]) : -1);
+    if (argc == 3 && strcmp(argv[1], "daycare") == 0)
+        return cmd_daycare(argv[2]);
+    if (argc == 7 && strcmp(argv[1], "transfer") == 0)
+        return cmd_transfer(argv[2], argv[3], atoi(argv[4]), atoi(argv[5]), argv[6]);
     if (argc == 6 && strcmp(argv[1], "trade") == 0)
         return cmd_trade(argv[2], atoi(argv[3]), argv[4], atoi(argv[5]));
     fprintf(stderr,
@@ -556,6 +826,11 @@ int main(int argc, char **argv)
             "  pkcli elig <save>\n"
             "  pkcli denick <save>                     reset every nickname to the species name\n"
             "  pkcli event <save> [idx]                list this game's events, or grant one's ticket\n"
-            "  pkcli release <save> <party|box> <box#> <idx>   remove a mon, compacting the slots after it\n");
+            "  pkcli release <save> <party|box> <box#> <idx>   remove a mon, compacting the slots after it\n"
+            "  pkcli items <save>                      bag, PC and held items (Gen 2)\n"
+            "  pkcli hold <save> <party|box> <box#> <idx> <item|none> [--conjure]   give/take a held item (Gen 2)\n"
+            "  pkcli flag <save> <id> [0|1]            read or set an event flag (Crystal, Gen 3)\n"
+            "  pkcli daycare <save>                    show the Day-Care (Gen 2)\n"
+            "  pkcli transfer <src> <party|box> <box#> <idx> <dst>   move a Gen 1/2 mon up to Gen 3\n");
     return 2;
 }
