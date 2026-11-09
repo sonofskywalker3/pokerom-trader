@@ -28,7 +28,10 @@ bool save_file_changed_on_disk(const PokemonSave *pkmn_save, const char *path);
 // committed (renamed over the originals) if both writes succeed; if a commit
 // step fails, the already-committed file is rolled back. On any failure the
 // on-disk files are unchanged, but the in-memory saves may not match them any
-// more -- reload them from disk.
+// more -- reload them from disk. save1 is committed first: for a transfer pass
+// the RECEIVING save as save1, so a crash between the two commits leaves the
+// mon in both saves rather than in neither. Refuses (error_save_same_file) if
+// both paths name the same file.
 pksavhelper_error save_two_savefiles(PokemonSave *save1, char *path1, PokemonSave *save2, char *path2);
 // Human-readable reason for a save-write error.
 const char *save_error_message(pksavhelper_error err);

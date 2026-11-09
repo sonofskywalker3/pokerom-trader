@@ -217,6 +217,8 @@ typedef enum
     error_transfer_hm_move,   // Pal Park refuses mons that know an HM
     error_save_stale,         // the file changed on disk since it was loaded
     error_save_write_failed, // writing/committing the file failed; disk unchanged
+    error_save_same_file,     // both sides of a two-file write are the same file
+    error_save_rollback_failed, // a failed commit couldn't be undone; see <path>.old
 } pksavhelper_error;
 
 #endif // COMMON_H

@@ -154,6 +154,10 @@ const char *save_error_message(pksavhelper_error err)
     case error_save_write_failed:
     case error_update_save:
         return "Could not write the save file. Nothing was changed on disk.";
+    case error_save_same_file:
+        return "Both sides are the same save file. Nothing was changed on disk.";
+    case error_save_rollback_failed:
+        return "Saving failed and could not be undone. The original is kept as <save>.old.";
     default:
         return "Saving failed.";
     }
@@ -448,12 +452,50 @@ static bool file_exists(const char *path)
     return stat(path, &st) == 0;
 }
 
-// Replace `target` with `tmp`: target -> old, tmp -> target. On failure
-// everything is put back and false is returned. `old` is left in place on
-// success so a caller committing several files can still roll back; remove()
-// it afterwards.
-static bool commit_file(const char *tmp, const char *target, const char *old, bool *had_target)
+// True if two paths name the same file (after making them absolute; compared
+// case-insensitively, with either slash). Used to refuse a two-file write to
+// one file, which would otherwise delete it: both sides share one .tmp/.old.
+static bool same_file_path(const char *a, const char *b)
 {
+    char ca[4096], cb[4096];
+#ifdef _WIN32
+    if (_fullpath(ca, a, sizeof(ca)) == NULL)
+        snprintf(ca, sizeof(ca), "%s", a);
+    if (_fullpath(cb, b, sizeof(cb)) == NULL)
+        snprintf(cb, sizeof(cb), "%s", b);
+#else
+    if (realpath(a, ca) == NULL)
+        snprintf(ca, sizeof(ca), "%s", a);
+    if (realpath(b, cb) == NULL)
+        snprintf(cb, sizeof(cb), "%s", b);
+#endif
+    return same_path(ca, cb);
+}
+
+// A leftover `<save>.old` means an earlier commit was interrupted (crash or
+// power loss between its steps) and may be the only copy of the pre-write
+// save. Keep it as `<save>.interrupted` instead of deleting it.
+static void keep_interrupted_old(const char *target, const char *old)
+{
+    if (!file_exists(old))
+        return;
+    char kept[1120];
+    make_sibling_path(kept, sizeof(kept), target, ".interrupted");
+    remove(kept);
+    if (rename(old, kept) == 0)
+    {
+        write_to_log("Kept a leftover .old file from an interrupted save as .interrupted", E_LOG_MESSAGE_TYPE_ERROR);
+    }
+}
+
+// Replace `target` with `tmp`: target -> old, tmp -> target. On failure the
+// original is put back and false is returned (*restored says whether that
+// worked). `old` is left in place on success so a caller committing several
+// files can still roll back; remove() it afterwards.
+static bool commit_file(const char *tmp, const char *target, const char *old, bool *had_target, bool *restored)
+{
+    *restored = true;
+    keep_interrupted_old(target, old);
     remove(old);
     *had_target = file_exists(target);
     if (*had_target && rename(target, old) != 0)
@@ -464,21 +506,37 @@ static bool commit_file(const char *tmp, const char *target, const char *old, bo
     {
         if (*had_target)
         {
-            rename(old, target);
+            *restored = rename(old, target) == 0;
         }
         return false;
     }
     return true;
 }
 
-// Undo a successful commit_file: put the old file back.
-static void rollback_file(const char *target, const char *old, bool had_target)
+// Undo a successful commit_file: put the old file back. The new file is moved
+// aside (not deleted) until the old one is safely back, so a failed restore
+// never leaves the save missing. Returns false if the old file couldn't be
+// restored; `old` then still holds it.
+static bool rollback_file(const char *target, const char *old, bool had_target)
 {
-    remove(target);
-    if (had_target)
+    if (!had_target)
     {
-        rename(old, target);
+        return remove(target) == 0;
     }
+    char aside[1120];
+    make_sibling_path(aside, sizeof(aside), target, ".rollback");
+    remove(aside);
+    if (rename(target, aside) != 0)
+    {
+        return false;
+    }
+    if (rename(old, target) != 0)
+    {
+        rename(aside, target);
+        return false;
+    }
+    remove(aside);
+    return true;
 }
 
 pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
@@ -499,12 +557,12 @@ pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
         remove(tmp);
         return e;
     }
-    bool had_target;
-    if (!commit_file(tmp, path, old, &had_target))
+    bool had_target, restored;
+    if (!commit_file(tmp, path, old, &had_target, &restored))
     {
         remove(tmp);
         error_handler(PKSAV_ERROR_FILE_IO, "Error replacing save file");
-        return error_save_write_failed;
+        return restored ? error_save_write_failed : error_save_rollback_failed;
     }
     remove(old);
     stamp_record(pkmn_save, path);
@@ -514,6 +572,11 @@ pksavhelper_error save_savefile_to_path(PokemonSave *pkmn_save, char *path)
 
 pksavhelper_error save_two_savefiles(PokemonSave *save1, char *path1, PokemonSave *save2, char *path2)
 {
+    if (same_file_path(path1, path2))
+    {
+        write_to_log("Refusing to save: both sides are the same file", E_LOG_MESSAGE_TYPE_ERROR);
+        return error_save_same_file;
+    }
     if (save_file_changed_on_disk(save1, path1) || save_file_changed_on_disk(save2, path2))
     {
         write_to_log("Refusing to save: file changed on disk since it was loaded", E_LOG_MESSAGE_TYPE_ERROR);
@@ -542,20 +605,20 @@ pksavhelper_error save_two_savefiles(PokemonSave *save1, char *path1, PokemonSav
     }
 
     // 2. Commit both, rolling the first back if the second fails.
-    bool had1, had2;
-    if (!commit_file(tmp1, path1, old1, &had1))
+    bool had1, had2, restored;
+    if (!commit_file(tmp1, path1, old1, &had1, &restored))
     {
         remove(tmp1);
         remove(tmp2);
         error_handler(PKSAV_ERROR_FILE_IO, "Error replacing save file");
-        return error_save_write_failed;
+        return restored ? error_save_write_failed : error_save_rollback_failed;
     }
-    if (!commit_file(tmp2, path2, old2, &had2))
+    if (!commit_file(tmp2, path2, old2, &had2, &restored))
     {
-        rollback_file(path1, old1, had1);
+        bool rolled_back = rollback_file(path1, old1, had1);
         remove(tmp2);
         error_handler(PKSAV_ERROR_FILE_IO, "Error replacing save file");
-        return error_save_write_failed;
+        return (restored && rolled_back) ? error_save_write_failed : error_save_rollback_failed;
     }
     remove(old1);
     remove(old2);

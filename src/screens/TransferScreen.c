@@ -180,7 +180,9 @@ void draw_transfer(PokemonSave *save_player1, PokemonSave *save_player2, char *p
                 {
                     // Both files go to temp files and are committed together:
                     // a failure can't lose the mon (or leave it in both saves).
-                    pksavhelper_error w = save_two_savefiles(source, source_path, dest, dest_path);
+                    // The destination is committed first, so even a crash
+                    // between the two commits can't lose it.
+                    pksavhelper_error w = save_two_savefiles(dest, dest_path, source, source_path);
                     if (w == error_none)
                     {
                         create_trainer(source, source_tr);
