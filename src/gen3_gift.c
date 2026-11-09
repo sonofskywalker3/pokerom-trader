@@ -187,6 +187,7 @@ pksavhelper_error gen3_gift_give(PokemonSave *save, const struct gen3_gift *g)
     {
         int i = (int)st->p_party->count;
         st->p_party->party[i].pc_data = mon;
+        st->p_party->party[i].party_data.pokerus_time = 0xFF; // fresh slot: no mail
         gen3_build_party_data(&mon, &st->p_party->party[i].party_data);
         st->p_party->count = (uint32_t)(i + 1);
     }

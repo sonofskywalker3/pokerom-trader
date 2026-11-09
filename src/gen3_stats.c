@@ -379,9 +379,18 @@ bool gen3_build_party_data(const struct pksav_gba_pc_pokemon *pc,
         num[lower] = 9;  den[lower] = 10;
     }
 
+    // Party byte 0x55 is the mail id (pksav calls it pokerus_time; Pokerus
+    // lives in the box data). 0xFF = no mail; 0 would point the mon at mail
+    // slot 0. Keep an existing id only if the mon really holds a mail item
+    // (Gen 3 items 121-132; 16 mail slots).
+    uint8_t old_mail = out->pokerus_time;
+    uint16_t held = pksav_littleendian16(pc->blocks.growth.held_item);
+    bool keeps_mail = held >= 121 && held <= 132 && old_mail < 16;
+
     memset(out, 0, sizeof(*out));
     out->level = (uint8_t)level;
     out->condition = 0;
+    out->pokerus_time = keeps_mail ? old_mail : 0xFF;
 
     // Shedinja always has 1 HP.
     if (base->max_hp == 1)
@@ -399,4 +408,38 @@ bool gen3_build_party_data(const struct pksav_gba_pc_pokemon *pc,
     out->spdef = gen3_calc_stat(false, base->spdef, iv_spdef, ev->ev_spdef, level, num[4], den[4]);
     out->current_hp = out->max_hp;
     return true;
+}
+
+/* Base PP per Gen 3 move id #0-354, generated from pret pokeemerald
+ * src/data/battle_moves.h (.pp) + include/constants/moves.h. */
+static const uint8_t gen3_move_pp_table[355] = {
+    0, 35, 25, 10, 15, 20, 20, 15, 15, 15, 35, 30, 5, 10, 30, 30, 35, 35, 20, 15,
+    20, 20, 10, 20, 30, 5, 25, 15, 15, 15, 25, 20, 5, 35, 15, 20, 20, 20, 15, 30,
+    35, 20, 20, 30, 25, 40, 20, 15, 20, 20, 20, 30, 25, 15, 30, 25, 5, 15, 10, 5,
+    20, 20, 20, 5, 35, 20, 25, 20, 20, 20, 15, 20, 10, 10, 40, 25, 10, 35, 30, 15,
+    20, 40, 10, 15, 30, 15, 20, 10, 15, 10, 5, 10, 10, 25, 10, 20, 40, 30, 30, 20,
+    20, 15, 10, 40, 15, 20, 30, 20, 20, 10, 40, 40, 30, 30, 30, 20, 30, 10, 10, 20,
+    5, 10, 30, 20, 20, 20, 5, 15, 10, 20, 15, 15, 35, 20, 15, 10, 20, 30, 15, 40,
+    20, 15, 10, 5, 10, 30, 10, 15, 20, 15, 40, 40, 10, 5, 15, 10, 10, 10, 15, 30,
+    30, 10, 10, 20, 10, 1, 1, 10, 10, 10, 5, 15, 25, 15, 10, 15, 30, 5, 40, 15,
+    10, 25, 10, 30, 10, 20, 10, 10, 10, 10, 10, 20, 5, 40, 5, 5, 15, 5, 10, 5,
+    15, 10, 5, 10, 20, 20, 40, 15, 10, 20, 20, 25, 5, 15, 10, 5, 20, 15, 20, 25,
+    20, 5, 30, 5, 10, 20, 40, 5, 20, 40, 20, 15, 35, 10, 5, 5, 5, 15, 5, 20,
+    5, 5, 15, 20, 10, 5, 5, 15, 15, 15, 15, 10, 10, 10, 10, 10, 10, 10, 10, 15,
+    15, 15, 10, 20, 20, 10, 20, 20, 20, 20, 20, 10, 10, 10, 20, 20, 5, 15, 10, 10,
+    15, 10, 20, 5, 5, 10, 10, 20, 5, 10, 20, 10, 20, 20, 20, 5, 5, 15, 20, 10,
+    15, 20, 15, 10, 10, 15, 10, 5, 5, 10, 15, 10, 5, 20, 25, 5, 40, 10, 5, 40,
+    15, 20, 20, 5, 15, 20, 30, 15, 15, 5, 10, 30, 20, 30, 15, 5, 40, 15, 5, 20,
+    5, 15, 25, 40, 15, 20, 15, 20, 15, 20, 10, 20, 20, 5, 5,
+};
+
+uint8_t gen3_move_max_pp(uint16_t move, uint8_t pp_ups)
+{
+    if (move == 0 || move >= sizeof(gen3_move_pp_table))
+    {
+        return 0;
+    }
+    uint8_t base = gen3_move_pp_table[move];
+    // CalculatePPWithBonus: base + base * 20% per PP Up
+    return (uint8_t)(base + (base * 20 * (pp_ups & 3)) / 100);
 }

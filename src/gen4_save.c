@@ -384,6 +384,20 @@ enum pksav_error gen4_save_save(const char *path, struct gen4_save *save)
     if (!save || !save->data)
         return PKSAV_ERROR_INVALID_SAVE;
 
+    /* HG/SS only rewrites the boxes whose bit is set in the box-changed mask
+     * (storage+0x12004, right after the current-box byte) on its next in-game
+     * save, copying the rest from the other partition -- which still holds the
+     * pre-edit boxes. Mark all 18 boxes changed so the edit survives, exactly as
+     * PKHeX (SAV4HGSS.GetFinalData, FlagsBoxContentChangedAll) does. */
+    if (save->game == GEN4_GAME_HGSS)
+    {
+        uint8_t *flags = save->data + save->storage_base + save->layout.current_box_off + 4;
+        flags[0] = 0xFF;
+        flags[1] = 0xFF;
+        flags[2] = 0x03;
+        flags[3] = 0x00;
+    }
+
     /* Recompute the active blocks' footer CRCs in place. The backup copies are
      * left untouched (the game overwrites them on its next save). */
     uint16_t gcrc = block_crc(save, save->general_base, save->layout.general_size);

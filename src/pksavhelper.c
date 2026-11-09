@@ -26,9 +26,41 @@ int error_handler(enum pksav_error error, const char *message)
     return 0;
 }
 
+// Number of Pokemon currently in the party, for bounds checks (0 when unknown).
+static int party_count_of(const PokemonSave *pkmn_save)
+{
+    switch (pkmn_save->save_generation_type)
+    {
+    case SAVE_GENERATION_1:
+        return pkmn_save->save.gen1_save.pokemon_storage.p_party->count;
+    case SAVE_GENERATION_2:
+        return pkmn_save->save.gen2_save.pokemon_storage.p_party->count;
+    case SAVE_GENERATION_3:
+        return (int)pksav_littleendian32(pkmn_save->save.gba_save.pokemon_storage.p_party->count);
+    case SAVE_GENERATION_4:
+        return gen4_party_count(&pkmn_save->save.gen4_save);
+    default:
+        return 0;
+    }
+}
+
+static bool party_index_valid(const PokemonSave *pkmn_save, int pkmn_party_index)
+{
+    int count = party_count_of(pkmn_save);
+    if (count > PKSAV_STANDARD_POKEMON_PARTY_SIZE)
+    {
+        count = PKSAV_STANDARD_POKEMON_PARTY_SIZE;
+    }
+    return pkmn_party_index >= 0 && pkmn_party_index < count;
+}
+
 pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon_party_index)
 {
     enum pksav_error pksav_error;
+    if (!party_index_valid(pkmn_save, pokemon_party_index))
+    {
+        return error_update_pokedex;
+    }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
     {
         const uint8_t *raw = gen4_party_slot_raw(&pkmn_save->save.gen4_save, pokemon_party_index);
@@ -47,11 +79,12 @@ pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon
     }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
-        uint16_t internal = pksav_littleendian16(pkmn_save->save.gba_save.pokemon_storage.p_party->party[pokemon_party_index].pc_data.blocks.growth.species);
+        const struct pksav_gba_pc_pokemon *pc = &pkmn_save->save.gba_save.pokemon_storage.p_party->party[pokemon_party_index].pc_data;
+        uint16_t internal = pksav_littleendian16(pc->blocks.growth.species);
         uint16_t dex = gen3_internal_to_national(internal);
-        if (dex == 0)
+        if (dex == 0 || (pksav_littleendian32(pc->blocks.misc.iv_egg_ability) & PKSAV_GBA_POKEMON_EGG_MASK))
         {
-            return error_none; // egg / unknown: nothing to record
+            return error_none; // egg (bit 30) / unknown: not dex-recorded until it hatches
         }
         struct pksav_gba_pokedex *pokedex = &pkmn_save->save.gba_save.pokedex;
         pksav_error = pksav_gba_pokedex_set_has_seen(pokedex, dex, true);
@@ -70,6 +103,10 @@ pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon
     {
         uint8_t pkmn_species = pkmn_save->save.gen1_save.pokemon_storage.p_party->species[pokemon_party_index];
         uint8_t pkdex_entry = species_gen1_to_gen2[pkmn_species]; // Gen2 is pokedex ordered
+        if (pkdex_entry < 1 || pkdex_entry > 151)
+        {
+            return error_none; // glitch / unknown index: no dex slot
+        }
         pksav_error = pksav_set_pokedex_bit(pkmn_save->save.gen1_save.pokedex_lists.p_seen, pkdex_entry, true);
         if (pksav_error != PKSAV_ERROR_NONE)
         {
@@ -84,7 +121,14 @@ pksavhelper_error update_seen_owned_pkmn(PokemonSave *pkmn_save, uint8_t pokemon
     }
     else
     {
+        // The species LIST byte is 0xFD for an egg (the real species is in
+        // pc_data); an egg isn't dex-registered until it hatches, and 0xFD
+        // would otherwise set bit 253 past the end of the 251-entry dex.
         uint8_t pokemon_species = pkmn_save->save.gen2_save.pokemon_storage.p_party->species[pokemon_party_index];
+        if (pokemon_species < 1 || pokemon_species > 251)
+        {
+            return error_none;
+        }
         pksav_error = pksav_set_pokedex_bit(pkmn_save->save.gen2_save.pokedex_lists.p_seen, pokemon_species, true);
         if (pksav_error != PKSAV_ERROR_NONE)
         {
@@ -223,29 +267,48 @@ void create_trainer(PokemonSave *pkmn_save, struct trainer_info *trainer)
 // Checks if supplied Gen 1 pokemon is eligible for trade evolution
 enum eligible_evolution_status check_trade_evolution_gen1(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
-    // Species index of pokemon being checked
+    if (!party_index_valid(pkmn_save, pkmn_party_index))
+    {
+        return E_EVO_STATUS_NOT_ELIGIBLE;
+    }
+    // Species index of pokemon being checked (the pair table only covers
+    // internal indices up to SI_HAUNTER)
     uint8_t species = pkmn_save->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index];
+    if (species >= sizeof(pkmn_evolution_pairs_gen1) / sizeof(pkmn_evolution_pairs_gen1[0]))
+    {
+        return E_EVO_STATUS_NOT_ELIGIBLE;
+    }
     struct pkmn_evolution_pair_data evo_pair = pkmn_evolution_pairs_gen1[species];
 
     // Check if the pokemon has an initialized evolution pair
-    return species == evo_pair.species_index;
+    return (species != 0 && species == evo_pair.species_index) ? E_EVO_STATUS_ELIGIBLE : E_EVO_STATUS_NOT_ELIGIBLE;
 }
 
 // Checks if supplied Gen 2 pokemon is eligible for trade evolution
 enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
-    // Species index of pokemon being checked
+    if (!party_index_valid(pkmn_save, pkmn_party_index))
+    {
+        return E_EVO_STATUS_NOT_ELIGIBLE;
+    }
+    // Species index of pokemon being checked (0xFD in the species list = egg)
     int species = pkmn_save->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index];
     struct pkmn_evolution_pair_data evo_pair = pkmn_evolution_pairs_gen2[species];
 
     // If the pkmn species has an initialized evolution pair
-    if (species != evo_pair.species_index)
+    if (species == 0 || species != evo_pair.species_index)
+    {
+        return E_EVO_STATUS_NOT_ELIGIBLE;
+    }
+
+    // An Everstone blocks trade evolution, as in the games
+    uint8_t held_item = pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.held_item;
+    if (held_item == GEN2_ITEM_EVERSTONE)
     {
         return E_EVO_STATUS_NOT_ELIGIBLE;
     }
 
     // Item evolutions (Metal Coat, King's Rock, ...) need the item held, as in a vanilla trade
-    uint8_t held_item = pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.held_item;
     if (evo_pair.evolution_item != 0 && held_item != evo_pair.evolution_item)
     {
         return E_EVO_STATUS_MISSING_ITEM;
@@ -256,12 +319,14 @@ enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save
 
 // --- Gen 3 trade evolutions ---
 // Held-item indices are Gen 3 item IDs.
+// (pret pokeemerald include/constants/items.h)
 #define GEN3_ITEM_KINGS_ROCK   187
-#define GEN3_ITEM_DEEPSEATOOTH 226
-#define GEN3_ITEM_DEEPSEASCALE 227
-#define GEN3_ITEM_UPGRADE      229
-#define GEN3_ITEM_METAL_COAT   233
-#define GEN3_ITEM_DRAGON_SCALE 235
+#define GEN3_ITEM_DEEPSEATOOTH 192
+#define GEN3_ITEM_DEEPSEASCALE 193
+#define GEN3_ITEM_EVERSTONE    195
+#define GEN3_ITEM_METAL_COAT   199
+#define GEN3_ITEM_DRAGON_SCALE 201
+#define GEN3_ITEM_UPGRADE      218
 
 // Trade-evolution table keyed by National Dex. required_item == 0 is a plain
 // trade evolution; otherwise the held item must match and is consumed.
@@ -298,6 +363,14 @@ static const struct gen3_trade_evo *gen3_find_trade_evo(const struct pksav_gba_p
     }
     uint16_t dex = gen3_internal_to_national(pksav_littleendian16(pc->blocks.growth.species));
     uint16_t held = pksav_littleendian16(pc->blocks.growth.held_item);
+    if (dex == 0 || held == GEN3_ITEM_EVERSTONE)
+    {
+        return NULL; // egg/unknown, or an Everstone blocks trade evolution
+    }
+    if (pksav_littleendian32(pc->blocks.misc.iv_egg_ability) & (1u << 30))
+    {
+        return NULL; // eggs don't evolve
+    }
     bool species_has_evo = false;
     size_t count = sizeof(gen3_trade_evos) / sizeof(gen3_trade_evos[0]);
     for (size_t i = 0; i < count; i++)
@@ -321,6 +394,10 @@ static const struct gen3_trade_evo *gen3_find_trade_evo(const struct pksav_gba_p
 
 enum eligible_evolution_status check_trade_evolution_gen3(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
+    if (!party_index_valid(pkmn_save, pkmn_party_index))
+    {
+        return E_EVO_STATUS_NOT_ELIGIBLE;
+    }
     const struct pksav_gba_pc_pokemon *pc = &pkmn_save->save.gba_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data;
     bool missing_item = false;
     const struct gen3_trade_evo *evo = gen3_find_trade_evo(pc, &missing_item);
@@ -347,11 +424,23 @@ void gb_set_dv(enum pksav_gb_IV stat, uint8_t value, uint16_t *p_raw_iv_data)
     *p_raw_iv_data = pksav_bigendian16(host);
 }
 
+// The games take ceil(sqrt(Stat Exp)) but cap it at 255: at 65535 Stat Exp
+// the uncapped value (256) would add one point too many.
+static double stat_exp_term(uint16_t stat_exp)
+{
+    double root = ceil(sqrt((double)stat_exp));
+    if (root > 255.0)
+    {
+        root = 255.0;
+    }
+    return floor(root / 4);
+}
+
 // Function to calculate HP based on base stat, IV, Stat Exp, and level
 // (16-bit: a level-100 mon can exceed 255 HP)
 uint16_t calculate_hp(uint8_t level, uint8_t base_hp, uint8_t dv_hp, uint16_t stat_exp)
 {
-    float hp_calc = (base_hp + dv_hp) * 2 + floor(ceil(sqrt(stat_exp)) / 4);
+    float hp_calc = (base_hp + dv_hp) * 2 + stat_exp_term(stat_exp);
     hp_calc = hp_calc * level / 100.0;
     hp_calc = floor(hp_calc) + level + 10;
 
@@ -362,7 +451,7 @@ uint16_t calculate_hp(uint8_t level, uint8_t base_hp, uint8_t dv_hp, uint16_t st
 // based on base stat, IV, Stat Exp, and level
 uint16_t calculate_stat(uint8_t level, uint8_t base_stat, uint8_t dv, uint16_t stat_exp)
 {
-    float stat_calc = (base_stat + dv) * 2 + floor(ceil(sqrt(stat_exp)) / 4);
+    float stat_calc = (base_stat + dv) * 2 + stat_exp_term(stat_exp);
     stat_calc = (stat_calc * level) / 100.0;
     stat_calc = floor(stat_calc) + 5;
 
@@ -476,6 +565,10 @@ void update_pkmn_DVs(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 // Calculate and update the pokemon's stats based on its level, base stats, IVs, and EVs
 void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
+    if (!party_index_valid(pkmn_save, pkmn_party_index))
+    {
+        return;
+    }
     // Gen 3 uses a different (nature-aware) formula; rebuild party_data wholesale.
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
@@ -525,8 +618,9 @@ void update_pkmn_stats(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
     }
     else
     {
-        // Get the species index
-        uint8_t species_index = pkmn_save->save.gen2_save.pokemon_storage.p_party->species[pkmn_party_index];
+        // Get the species index from the mon itself: the species LIST byte is
+        // 0xFD for an egg, which would index empty base stats.
+        uint8_t species_index = pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.species;
         uint8_t pkmn_level = pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].pc_data.level;
 
         // Get the pokemon's EVs
@@ -564,13 +658,25 @@ bool is_move_HM(uint8_t move_index)
     return move_index == MOVE_INDEX_HM01 || move_index == MOVE_INDEX_HM02 || move_index == MOVE_INDEX_HM03 || move_index == MOVE_INDEX_HM04 || move_index == MOVE_INDEX_HM05 || move_index == MOVE_INDEX_HM06;
 }
 
+// Gen 3 Mail items are 121-132. A mon holding one has a letter in the save's
+// mail table (index = party byte 0x55); the app can't carry that letter over.
+bool gen3_holds_mail(const struct pksav_gba_pc_pokemon *pc)
+{
+    uint16_t item = pksav_littleendian16(pc->blocks.growth.held_item);
+    return item >= 121 && item <= 132;
+}
+
 enum eligible_trade_status check_trade_eligibility(struct trainer_info *trainer, uint8_t pkmn_party_index)
 {
-    // Gen 3 <-> Gen 3 trades have no cross-gen restrictions (only reached for
-    // cross-gen pairs, which never involve Gen 3).
+    // Gen 3 <-> Gen 3: no cross-gen restrictions, but a mon holding Mail is
+    // refused (its letter would be left behind / point into the other save).
     if (trainer->trainer_generation == SAVE_GENERATION_3)
     {
-        (void)pkmn_party_index;
+        if (pkmn_party_index < PKSAV_GBA_PARTY_NUM_POKEMON &&
+            gen3_holds_mail(&trainer->pokemon_party.gba_pokemon_party.party[pkmn_party_index].pc_data))
+        {
+            return E_TRADE_STATUS_MAIL;
+        }
         return E_TRADE_STATUS_ELIGIBLE;
     }
 
@@ -767,7 +873,13 @@ pksavhelper_error swap_pkmn_at_index_between_saves_cross_gen(PokemonSave *player
     // data not found in gen2
     player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.types[0] = pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].types[0];
     player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.types[1] = pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].types[1];
-    player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.catch_rate = pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].catch_rate;
+    // The Time Capsule stores a Gen 2 mon's held item in the Gen 1 catch-rate
+    // byte (so it comes back with the item); an empty hand keeps the species'
+    // base catch rate there.
+    player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.catch_rate =
+        tmp_pokemon_gen2.pc_data.held_item != 0
+            ? tmp_pokemon_gen2.pc_data.held_item
+            : pkmn_base_stats_gen1[player_gen1->save.gen1_save.pokemon_storage.p_party->party[pkmn_party_index1].pc_data.species].catch_rate;
 
     // swap species
     uint8_t tmp_species_gen1 = player_gen1->save.gen1_save.pokemon_storage.p_party->species[pkmn_party_index1];
@@ -831,6 +943,12 @@ pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, Po
     {
         struct pksav_gba_pokemon_party *p1 = player1_save->save.gba_save.pokemon_storage.p_party;
         struct pksav_gba_pokemon_party *p2 = player2_save->save.gba_save.pokemon_storage.p_party;
+        if (pkmn_party_index1 >= p1->count || pkmn_party_index2 >= p2->count ||
+            gen3_holds_mail(&p1->party[pkmn_party_index1].pc_data) ||
+            gen3_holds_mail(&p2->party[pkmn_party_index2].pc_data))
+        {
+            return error_swap_pkmn; // bad slot, or Mail that can't travel with it
+        }
         struct pksav_gba_party_pokemon tmp = p1->party[pkmn_party_index1];
         p1->party[pkmn_party_index1] = p2->party[pkmn_party_index2];
         p2->party[pkmn_party_index2] = tmp;
@@ -987,8 +1105,26 @@ pksavhelper_error swap_pkmn_at_index_between_saves(PokemonSave *player1_save, Po
 }
 
 // Convert party pokemon to evolution pokemon with updated stats and properties
-void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
+bool evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index)
 {
+    // Refuse anything but an occupied, trade-evolution-eligible party slot:
+    // writing through a bad index corrupts the save.
+    if (!party_index_valid(pkmn_save, pkmn_party_index))
+    {
+        return false;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_1 && check_trade_evolution_gen1(pkmn_save, pkmn_party_index) != E_EVO_STATUS_ELIGIBLE)
+    {
+        return false;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_2 && check_trade_evolution_gen2(pkmn_save, pkmn_party_index) != E_EVO_STATUS_ELIGIBLE)
+    {
+        return false;
+    }
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_4)
+    {
+        return false; // no Gen 4 evolve support
+    }
     if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
     {
         struct pksav_gba_party_pokemon *party = &pkmn_save->save.gba_save.pokemon_storage.p_party->party[pkmn_party_index];
@@ -997,7 +1133,7 @@ void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_in
         const struct gen3_trade_evo *evo = gen3_find_trade_evo(pc, NULL);
         if (evo == NULL)
         {
-            return; // not eligible (shouldn't happen; UI gates on eligibility)
+            return false; // not eligible
         }
 
         // If the nickname is still the default (pre-evo species name), update it.
@@ -1036,7 +1172,7 @@ void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_in
 
         // Recompute the derived stats for the new species.
         gen3_build_party_data(pc, &party->party_data);
-        return;
+        return true;
     }
 
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
@@ -1117,6 +1253,7 @@ void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_in
         // Update condition to none
         pkmn_save->save.gen2_save.pokemon_storage.p_party->party[pkmn_party_index].party_data.condition = PKSAV_CONDITION_NONE;
     }
+    return true;
 }
 
 /************************************************************************
@@ -1410,6 +1547,7 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
         gen4_pk4_decrypt(raw, dec, is_party);
         out_view->species = gen4_pk4_species(dec); // Gen 4 species == National Dex
         out_view->dex = out_view->species;
+        out_view->is_egg = gen4_pk4_is_egg(dec);
         // Party record caches the level; boxed mons store none (derive from EXP).
         out_view->level = is_party ? gen4_pk4_party_level(dec) : 0;
         // Only nicknamed mons carry a meaningful name field; for the rest the game
@@ -1443,6 +1581,7 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
         }
         out_view->species = pc->blocks.growth.species; // internal index
         out_view->dex = gen3_internal_to_national(pc->blocks.growth.species);
+        out_view->is_egg = (pksav_littleendian32(pc->blocks.misc.iv_egg_ability) & PKSAV_GBA_POKEMON_EGG_MASK) != 0;
         pksav_gba_import_text(pc->nickname, out_view->nickname, PKMN_NAME_TEXT_MAX);
         // Types via National Dex (Kanto 1-151 only; Hoenn/Johto show unknown).
         bills_pc_species_types(pkmn_save, out_view->dex, &out_view->type1, &out_view->type2);
@@ -1502,6 +1641,7 @@ void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location loca
     else
     {
         out_view->dex = out_view->species;
+        out_view->is_egg = (out_view->species == 0xFD); // the species list shows eggs as 0xFD
     }
 }
 
@@ -1615,7 +1755,7 @@ void pokedex_reconcile(PokemonSave *pkmn_save)
     for (int i = 0; i < bills_pc_party_capacity(pkmn_save); i++)
     {
         bills_pc_get_view(pkmn_save, BILLS_PC_LOC_PARTY, 0, i, &view);
-        if (view.occupied)
+        if (view.occupied && !view.is_egg)
         {
             pokedex_mark_owned(pkmn_save, view.dex);
         }
@@ -1627,7 +1767,7 @@ void pokedex_reconcile(PokemonSave *pkmn_save)
         for (int i = 0; i < capacity; i++)
         {
             bills_pc_get_view(pkmn_save, BILLS_PC_LOC_BOX, b, i, &view);
-            if (view.occupied)
+            if (view.occupied && !view.is_egg)
             {
                 pokedex_mark_owned(pkmn_save, view.dex);
             }
@@ -1638,11 +1778,16 @@ void pokedex_reconcile(PokemonSave *pkmn_save)
 bool bills_pc_slot_holds_mail(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index)
 {
     (void)box_num;
-    if (pkmn_save->save_generation_type != SAVE_GENERATION_2 || location != BILLS_PC_LOC_PARTY)
+    if (location != BILLS_PC_LOC_PARTY || index < 0 || index >= PKSAV_STANDARD_POKEMON_PARTY_SIZE)
     {
         return false;
     }
-    if (index < 0 || index >= PKSAV_GEN2_PARTY_NUM_POKEMON)
+    if (pkmn_save->save_generation_type == SAVE_GENERATION_3)
+    {
+        return index < (int)pkmn_save->save.gba_save.pokemon_storage.p_party->count &&
+               gen3_holds_mail(&pkmn_save->save.gba_save.pokemon_storage.p_party->party[index].pc_data);
+    }
+    if (pkmn_save->save_generation_type != SAVE_GENERATION_2)
     {
         return false;
     }
@@ -1739,8 +1884,18 @@ static void g1_finalize_party(PokemonSave *s, int i)
     }
     p->pc_data.level = level;
     p->party_data.level = level;
-    update_pkmn_stats(s, i); // fills max_hp/atk/... and pc_data.current_hp
-    p->pc_data.condition = PKSAV_GB_CONDITION_NONE;
+    // Gen 1's PC keeps a mon's current HP and status (unlike Gen 2's, it
+    // doesn't heal), so a withdrawal or party move must not heal it either.
+    uint16_t current_hp = pksav_bigendian16(p->pc_data.current_hp);
+    uint8_t condition = p->pc_data.condition;
+    update_pkmn_stats(s, i); // fills max_hp/atk/... (and sets current_hp = max)
+    uint16_t max_hp = pksav_bigendian16(p->party_data.max_hp);
+    if (current_hp > max_hp)
+    {
+        current_hp = max_hp;
+    }
+    p->pc_data.current_hp = pksav_bigendian16(current_hp);
+    p->pc_data.condition = condition;
 }
 
 static void g1_write(PokemonSave *s, struct g1_ctx *c, int i, const struct g1_mon *m)
@@ -2100,6 +2255,17 @@ static pksavhelper_error bills_pc_move_gen3(PokemonSave *s, struct bills_pc_slot
     }
     bool dst_occupied = bills_pc_slot_occupied(s, dst.location, dst.box_num, dst.index);
 
+    // As in the games, a mon holding Mail can't go into a box (the letter
+    // lives in the party mail slots): take the Mail off in-game first.
+    if (src_party && !dst_party && gen3_holds_mail(&st->p_party->party[src.index].pc_data))
+    {
+        return error_swap_pkmn;
+    }
+    if (!src_party && dst_party && dst_occupied && gen3_holds_mail(&st->p_party->party[dst.index].pc_data))
+    {
+        return error_swap_pkmn;
+    }
+
     // box <-> box (swap if dst occupied, move if dst empty)
     if (!src_party && !dst_party)
     {
@@ -2151,7 +2317,7 @@ static pksavhelper_error bills_pc_move_gen3(PokemonSave *s, struct bills_pc_slot
         }
         // Swap: the box mon enters the party slot, so it needs rebuilt party_data.
         struct pksav_gba_pc_pokemon box_mon = *box_entry;
-        struct pksav_gba_pokemon_party_data pd;
+        struct pksav_gba_pokemon_party_data pd = {.pokerus_time = 0xFF}; // box mons never hold mail
         if (!gen3_build_party_data(&box_mon, &pd))
         {
             return error_swap_pkmn;
@@ -2167,7 +2333,7 @@ static pksavhelper_error bills_pc_move_gen3(PokemonSave *s, struct bills_pc_slot
     {
         struct pksav_gba_pc_pokemon *box_entry = &st->p_pc->boxes[src.box_num].entries[src.index];
         struct pksav_gba_pc_pokemon box_mon = *box_entry;
-        struct pksav_gba_pokemon_party_data pd;
+        struct pksav_gba_pokemon_party_data pd = {.pokerus_time = 0xFF}; // box mons never hold mail
         if (!gen3_build_party_data(&box_mon, &pd))
         {
             return error_swap_pkmn; // egg / unknown species: can't build legal stats
@@ -2196,6 +2362,15 @@ static pksavhelper_error bills_pc_move_gen3(PokemonSave *s, struct bills_pc_slot
 /* Convert a raw 136-byte stored (box) PK4 into a raw 236-byte party PK4 with a
  * freshly-derived stats region. Returns false if the mon has no legal stats
  * (empty/egg/unknown species) — the caller must refuse the move. */
+// The games store an empty Gen 4 slot as an ENCRYPTED all-zero mon (PID 0,
+// checksum 0 -> a fixed non-zero byte pattern), not raw zeros; verified on all
+// five retail DS saves. Write that, as PKHeX does.
+static void gen4_write_blank_slot(uint8_t *slot, bool is_party)
+{
+    uint8_t zero[GEN4_PK4_PARTY_SIZE] = {0};
+    gen4_pk4_encrypt(zero, slot, is_party);
+}
+
 static bool gen4_stored_to_party_raw(const uint8_t *box_raw, uint8_t *party_raw_out)
 {
     uint8_t dec[GEN4_PK4_PARTY_SIZE];
@@ -2287,7 +2462,7 @@ static pksavhelper_error bills_pc_move_gen4(PokemonSave *s, struct bills_pc_slot
                 uint8_t *nxt = gen4_party_slot_raw_mut(g4, i + 1);
                 memcpy(cur, nxt, GEN4_PK4_PARTY_SIZE);
             }
-            memset(gen4_party_slot_raw_mut(g4, count - 1), 0, GEN4_PK4_PARTY_SIZE);
+            gen4_write_blank_slot(gen4_party_slot_raw_mut(g4, count - 1), true);
             gen4_set_party_count(g4, (uint8_t)(count - 1));
             return error_none;
         }
@@ -2329,7 +2504,7 @@ static pksavhelper_error bills_pc_move_gen4(PokemonSave *s, struct bills_pc_slot
             }
             memcpy(gen4_party_slot_raw_mut(g4, count), new_party, GEN4_PK4_PARTY_SIZE);
             gen4_set_party_count(g4, (uint8_t)(count + 1));
-            memset(box_slot, 0, GEN4_PK4_STORED_SIZE);
+            gen4_write_blank_slot(box_slot, false);
             return error_none;
         }
         // Swap with an occupied party slot: party mon drops to the box.
@@ -2451,7 +2626,7 @@ void bills_pc_sort_box(PokemonSave *pkmn_save, int box_num, enum bills_pc_sort_m
         }
         for (int k = m; k < GEN4_BOX_SLOTS; k++)
         {
-            memset(gen4_box_slot_raw_mut(g4, box_num, k), 0, GEN4_PK4_STORED_SIZE);
+            gen4_write_blank_slot(gen4_box_slot_raw_mut(g4, box_num, k), false);
         }
         return;
     }
@@ -2622,7 +2797,7 @@ void bills_pc_sort_all_boxes(PokemonSave *pkmn_save, enum bills_pc_sort_mode mod
                 }
                 else
                 {
-                    memset(slot, 0, GEN4_PK4_STORED_SIZE);
+                    gen4_write_blank_slot(slot, false);
                 }
             }
         }
@@ -2794,8 +2969,32 @@ void bills_pc_flush_current_box(PokemonSave *pkmn_save)
     int cur = bills_pc_current_box_num(pkmn_save);
     if (pkmn_save->save_generation_type == SAVE_GENERATION_1)
     {
-        *pkmn_save->save.gen1_save.pokemon_storage.p_current_box =
-            *pkmn_save->save.gen1_save.pokemon_storage.pp_boxes[cur];
+        struct pksav_gen1_pokemon_storage *st = &pkmn_save->save.gen1_save.pokemon_storage;
+        *st->p_current_box = *st->pp_boxes[cur];
+
+        // Bit 7 of the current-box byte means "SRAM boxes initialized". While
+        // it is clear the game empties EVERY SRAM box the first time the
+        // player switches boxes, which would wipe whatever the app placed in
+        // them. Do that initialization now -- empty any box that isn't a
+        // well-formed list (the game's EmptyAllSRAMBoxes writes count 0 +
+        // 0xFF terminator), keep well-formed ones -- and set the bit.
+        if (!(*st->p_current_box_num & 0x80))
+        {
+            for (int b = 0; b < PKSAV_GEN1_NUM_POKEMON_BOXES; b++)
+            {
+                if (b == cur)
+                {
+                    continue;
+                }
+                struct pksav_gen1_pokemon_box *box = st->pp_boxes[b];
+                if (box->count > PKSAV_GEN1_BOX_NUM_POKEMON || box->species[box->count] != 0xFF)
+                {
+                    box->count = 0;
+                    box->species[0] = 0xFF;
+                }
+            }
+            *st->p_current_box_num |= 0x80;
+        }
     }
     else if (pkmn_save->save_generation_type == SAVE_GENERATION_2)
     {

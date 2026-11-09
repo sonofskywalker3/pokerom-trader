@@ -34,11 +34,15 @@ const char *gen4_species_name(uint16_t national_dex);
 uint8_t gen4_ability_id(uint16_t national_dex, int slot);
 
 // Whether a Gen 3 Pokemon of this species uses its ability bit (IV word bit 31,
-// = PID bit 0 for game-created mons). Single-ability species must leave it
-// clear; the ability table repeats their one ability in slot 2, so compare.
-// Granbull, Vibrava and Flygon list the same ability twice but still follow
-// the PID (per PKHeX's AbilityVerifier).
+// = PID bit 0 for game-created mons): true only if the species has a second
+// ability slot IN GEN 3 (pret pokeemerald data, not the Gen 4 table -- Pidgey,
+// Hypno, Eevee etc. only gained theirs in Gen 4). Single-ability species must
+// leave it clear. Granbull, Vibrava and Flygon list the same ability twice and
+// still follow the PID (per PKHeX's AbilityVerifier).
 bool gen3_species_uses_ability_bit(uint16_t national_dex);
+// The Gen 3 ability id a mon of this species has with this ability bit
+// (0 if out of range). Gen 3 ability ids are the same numbers in Gen 4.
+uint8_t gen3_ability_id(uint16_t national_dex, bool ability_bit);
 
 /* Growth-rate group (0=Medium Fast, 1=Erratic, 2=Fluctuating, 3=Medium Slow,
  * 4=Fast, 5=Slow) for a National Dex number (#1..493), 0 if out of range. */

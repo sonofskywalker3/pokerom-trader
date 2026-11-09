@@ -9,6 +9,7 @@
 #include "gen4_save.h"     /* mutable slot accessors, party count */
 #include "gen4_pkmn.h"     /* PK4 encode + text encode */
 #include "gen4_stats.h"    /* ability id, species name, level-from-exp, party stats */
+#include "gen3_stats.h"    /* move PP */
 #include <pksav.h>
 #include <string.h>
 #include <time.h>
@@ -19,16 +20,123 @@ static inline void wr32(uint8_t *p, uint32_t v)
     p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
 }
 
-/* Case-insensitive ASCII compare (mingw lacks a portable strcasecmp here). */
-static int ci_equal(const char *a, const char *b)
+/* Gen 3 (international) text byte -> Gen 4 character code, generated from
+ * PKHeX's StringConverter3 G3_EN and StringConverter4Util TableINT tables
+ * (what Pal Park's glyph transfer does). Keeps the glyphs an ASCII round trip
+ * loses: the male/female signs (0xB5/0xB6 -> 0x1BB/0x1BC), the apostrophe of
+ * FARFETCH'D (0xB4 -> 0x1B3), quotes, accented letters. 0 = no equivalent. */
+static const uint16_t g3_to_g4_char[256] = {
+    0x1DE, 0x15F, 0x160, 0x161, 0x166, 0x167, 0x168, 0x169, 0x16A, 0x16B, 0x014, 0x16D, 0x16E, 0x171, 0x172, 0x173, /* 00 */
+    0x19F, 0x178, 0x179, 0x17A, 0x170, 0x17E, 0x17F, 0x180, 0x02E, 0x186, 0x187, 0x188, 0x189, 0x18A, 0x18B, 0x03F, /* 10 */
+    0x18D, 0x18E, 0x191, 0x192, 0x193, 0x1A0, 0x198, 0x199, 0x19A, 0x190, 0x1A4, 0x1A3, 0x1A5, 0x1C2, 0x1BD, 0x003, /* 20 */
+    0x004, 0x006, 0x008, 0x00A, 0x044, 0x1C1, 0x1C5, 0x00D, 0x00F, 0x011, 0x013, 0x015, 0x017, 0x019, 0x01B, 0x01D, /* 30 */
+    0x01F, 0x021, 0x023, 0x026, 0x028, 0x02A, 0x031, 0x034, 0x037, 0x03A, 0x03D, 0x032, 0x035, 0x038, 0x03B, 0x03E, /* 40 */
+    0x024, 0x1AA, 0x1A9, 0x1E0, 0x1E1, 0x05B, 0x05C, 0x05E, 0x060, 0x062, 0x16C, 0x1D2, 0x1B9, 0x1BA, 0x06C, 0x06E, /* 50 */
+    0x070, 0x072, 0x075, 0x077, 0x079, 0x07B, 0x07C, 0x07D, 0x181, 0x07F, 0x080, 0x083, 0x086, 0x089, 0x08C, 0x18C, /* 60 */
+    0x090, 0x091, 0x092, 0x093, 0x095, 0x097, 0x099, 0x09A, 0x09B, 0x11C, 0x11D, 0x11B, 0x0F0, 0x0A0, 0x0A1, 0x052, /* 70 */
+    0x054, 0x056, 0x058, 0x05A, 0x1DF, 0x000, 0x000, 0x05D, 0x05F, 0x061, 0x063, 0x065, 0x067, 0x069, 0x06B, 0x06D, /* 80 */
+    0x06F, 0x071, 0x073, 0x076, 0x078, 0x07A, 0x081, 0x084, 0x087, 0x08A, 0x08D, 0x082, 0x085, 0x088, 0x08B, 0x08E, /* 90 */
+    0x074, 0x121, 0x122, 0x123, 0x124, 0x125, 0x126, 0x127, 0x128, 0x129, 0x12A, 0x1AB, 0x1AC, 0x1AE, 0x1BE, 0x1B0, /* A0 */
+    0x1AF, 0x1B4, 0x1B5, 0x1B2, 0x1B3, 0x1BB, 0x1BC, 0x1A8, 0x1AD, 0x176, 0x1B1, 0x12B, 0x12C, 0x12D, 0x12E, 0x12F, /* B0 */
+    0x130, 0x131, 0x132, 0x133, 0x134, 0x135, 0x136, 0x137, 0x138, 0x139, 0x13A, 0x13B, 0x13C, 0x13D, 0x13E, 0x13F, /* C0 */
+    0x140, 0x141, 0x142, 0x143, 0x144, 0x145, 0x146, 0x147, 0x148, 0x149, 0x14A, 0x14B, 0x14C, 0x14D, 0x14E, 0x14F, /* D0 */
+    0x150, 0x151, 0x152, 0x153, 0x154, 0x155, 0x156, 0x157, 0x158, 0x159, 0x15A, 0x15B, 0x15C, 0x15D, 0x15E, 0x11F, /* E0 */
+    0x1C4, 0x163, 0x175, 0x17B, 0x183, 0x195, 0x19B, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, 0x000, /* F0 */
+};
+
+/* Convert a 0xFF-terminated Gen 3 name into a Gen 4 name field (0xFFFF
+ * terminator, 0x0000 padding, as the games write it). */
+static void gen3_name_to_gen4(const uint8_t *g3, int g3_len, uint8_t *field, int field_slots)
 {
-    for (; *a && *b; a++, b++)
+    int w = 0;
+    for (int i = 0; i < g3_len && g3[i] != 0xFF && w < field_slots - 1; i++)
     {
-        char ca = (*a >= 'A' && *a <= 'Z') ? (char)(*a + 32) : *a;
-        char cb = (*b >= 'A' && *b <= 'Z') ? (char)(*b + 32) : *b;
-        if (ca != cb) return 0;
+        uint16_t code = g3_to_g4_char[g3[i]];
+        if (code == 0)
+            code = 0x01AC; /* '?' */
+        wr16(field + 2 * w, code);
+        w++;
     }
-    return *a == *b;
+    wr16(field + 2 * w, 0xFFFF);
+    for (w = w + 1; w < field_slots; w++)
+        wr16(field + 2 * w, 0x0000);
+}
+
+/* ASCII -> Gen 3 byte for the characters used in English species names. */
+static uint8_t ascii_to_gen3(char c)
+{
+    if (c >= 'A' && c <= 'Z') return (uint8_t)(0xBB + (c - 'A'));
+    if (c >= 'a' && c <= 'z') return (uint8_t)(0xBB + (c - 'a')); /* stored uppercase */
+    if (c >= '0' && c <= '9') return (uint8_t)(0xA1 + (c - '0'));
+    switch (c)
+    {
+    case ' ': return 0x00;
+    case '.': return 0xAD;
+    case '-': return 0xAE;
+    case '\'': return 0xB4;
+    default: return 0xAC; /* '?' */
+    }
+}
+
+/* Is the Gen 3 nickname anything but the default (uppercase English) species
+ * name? Compared byte-for-byte in Gen 3 encoding, so the two NIDORANs,
+ * FARFETCH'D and MR. MIME compare correctly. */
+static bool gen3_is_nicknamed(const uint8_t *nick, uint16_t dex)
+{
+    uint8_t want[PKSAV_GBA_POKEMON_NICKNAME_LENGTH];
+    memset(want, 0xFF, sizeof(want));
+    int n = 0;
+    if (dex == 29 || dex == 32) /* the ASCII table spells these "Nidoran-F/-M" */
+    {
+        const char *base = "NIDORAN";
+        for (; base[n]; n++) want[n] = ascii_to_gen3(base[n]);
+        want[n++] = (dex == 29) ? 0xB6 : 0xB5;
+    }
+    else
+    {
+        const char *name = gen3_national_dex_name(dex);
+        for (; name[n] && n < (int)sizeof(want); n++) want[n] = ascii_to_gen3(name[n]);
+    }
+    for (int i = 0; i < (int)sizeof(want); i++)
+    {
+        uint8_t a = nick[i], b = want[i];
+        if (a != b) return true;
+        if (a == 0xFF) return false;
+    }
+    return false;
+}
+
+/* Gen 3 HM moves: Cut, Fly, Surf, Strength, Flash, Rock Smash, Waterfall, Dive.
+ * Pal Park refuses a mon that knows one. */
+static bool gen3_is_hm_move(uint16_t move)
+{
+    return move == 15 || move == 19 || move == 57 || move == 70 || move == 148 ||
+           move == 249 || move == 127 || move == 291;
+}
+
+/* Max PP in Gen 4 for a Gen 3 move (#1-354): Gen 4 changed six base PP values
+ * (PKHeX MoveInfo3/MoveInfo4 PP tables): Vine Whip, Absorb, Mega Drain, Giga
+ * Drain, Stockpile up; Recover down. Pal Park heals to the Gen 4 value. */
+static uint8_t gen4_max_pp_for_gen3_move(uint16_t move, uint8_t ups)
+{
+    uint8_t base;
+    switch (move)
+    {
+    case 22:  base = 15; break; /* Vine Whip */
+    case 71:  base = 25; break; /* Absorb */
+    case 72:  base = 15; break; /* Mega Drain */
+    case 105: base = 10; break; /* Recover */
+    case 202: base = 10; break; /* Giga Drain */
+    case 254: base = 20; break; /* Stockpile */
+    default:  return gen3_move_max_pp(move, ups);
+    }
+    return (uint8_t)(base + (base * 20 * (ups & 3)) / 100);
+}
+
+static int gba_unown_form(uint32_t pid)
+{
+    int v = (int)((((pid >> 24) & 3) << 6) | (((pid >> 16) & 3) << 4) | (((pid >> 8) & 3) << 2) | (pid & 3));
+    return v % 28;
 }
 
 /* Gen 3 item index -> Gen 4 item id (0 = no Gen 4 equivalent, item dropped).
@@ -131,8 +239,9 @@ static bool build_pk4_from_gen3(const struct pksav_gba_pc_pokemon *g3,
     wr16(dec + 0x0E, sid);
     wr32(dec + 0x10, pksav_littleendian32(g3->blocks.growth.exp));
     dec[0x14] = 70; /* Pal Park resets friendship */
-    int ability_slot = (int)((iv_egg >> 31) & 1u);
-    dec[0x15] = gen4_ability_id(dex, ability_slot);
+    /* Keep the ability the mon had in Gen 3 (Pal Park copies it; the Gen 4
+     * table would hand e.g. a Gen 3 Pidgey or Hypno a Gen 4-only ability). */
+    dec[0x15] = gen3_ability_id(dex, (iv_egg >> 31) & 1u);
     dec[0x16] = (uint8_t)(g3->markings & 0x0F); /* basic marks carry over */
     uint8_t lang = (uint8_t)(pksav_littleendian16(g3->language) & 0xFF);
     dec[0x17] = (lang >= 1 && lang <= 8) ? lang : 2 /* English */;
@@ -146,31 +255,48 @@ static bool build_pk4_from_gen3(const struct pksav_gba_pc_pokemon *g3,
     dec[0x20] = ev->contest_stats.cute;  dec[0x21] = ev->contest_stats.smart;
     dec[0x22] = ev->contest_stats.tough; dec[0x23] = ev->contest_stats.feel;
 
-    /* moves/PP/PP-ups @0x28/0x30/0x34 */
+    /* moves/PP/PP-ups @0x28/0x30/0x34; Pal Park heals PP (PKHeX HealPP) */
     for (int i = 0; i < 4; i++)
     {
-        wr16(dec + 0x28 + 2 * i, pksav_littleendian16(g3->blocks.attacks.moves[i]));
-        dec[0x30 + i] = g3->blocks.attacks.move_pps[i];
-        dec[0x34 + i] = (uint8_t)((g3->blocks.growth.pp_up >> (2 * i)) & 3);
+        uint16_t move = pksav_littleendian16(g3->blocks.attacks.moves[i]);
+        uint8_t ups = (uint8_t)((g3->blocks.growth.pp_up >> (2 * i)) & 3);
+        wr16(dec + 0x28 + 2 * i, move);
+        dec[0x30 + i] = move ? gen4_max_pp_for_gen3_move(move, ups) : 0;
+        dec[0x34 + i] = move ? ups : 0;
     }
 
-    /* Text: import from Gen 3, decide nickname flag, re-encode into Gen 4. */
-    char nick[16] = {0}, otname[16] = {0};
-    pksav_gba_import_text(g3->nickname, nick, PKMN_NAME_TEXT_MAX);
-    pksav_gba_import_text(g3->otname, otname, TRAINER_NAME_TEXT_MAX);
-    bool nicknamed = !ci_equal(nick, gen4_species_name(dex));
-    gen4_encode_text(nick, dec + 0x48, 11);
-    gen4_encode_text(otname, dec + 0x68, 8);
+    /* Text: straight Gen 3 -> Gen 4 glyph transfer (no ASCII round trip). */
+    bool nicknamed = gen3_is_nicknamed(g3->nickname, dex);
+    gen3_name_to_gen4(g3->nickname, PKSAV_GBA_POKEMON_NICKNAME_LENGTH, dec + 0x48, 11);
+    gen3_name_to_gen4(g3->otname, PKSAV_GBA_POKEMON_OTNAME_LENGTH, dec + 0x68, 8);
 
     /* IV32 @0x38: 30 IV bits, egg = 0, IsNicknamed = bit31. */
     uint32_t iv32 = iv_egg & 0x3FFFFFFFu;
     if (nicknamed) iv32 |= (1u << 31);
     wr32(dec + 0x38, iv32);
 
-    /* Gender byte @0x40: bit1 female, bit2 genderless (bit0 fateful = 0). */
+    /* Byte @0x40: bit0 fateful encounter, bit1 female, bit2 genderless,
+     * bits 3-7 form (Unown's letter comes from its PID). */
+    uint32_t ribbons = pksav_littleendian32(g3->blocks.misc.ribbons_obedience);
+    if (ribbons & 0x80000000u) dec[0x40] |= 0x01;        /* fateful (Gen 3 bit 31) */
     uint8_t gt = gender_threshold[dex];
     if (gt == 255) dec[0x40] |= 0x04;                       /* genderless */
     else if (gt != 0 && (gt == 254 || (pid & 0xFF) < gt)) dec[0x40] |= 0x02; /* female */
+    if (dex == 201) dec[0x40] |= (uint8_t)(gba_unown_form(pid) << 3);
+
+    /* Hoenn ribbons @0x3C (PKHeX PK3.ConvertToPK4): each Gen 3 contest
+     * category is a 0-4 rank count -> 4 cumulative bits; the 12 single
+     * ribbons (Gen 3 bits 15-26) land on bits 20-31. */
+    uint32_t hoenn = 0;
+    for (int cat = 0; cat < 5; cat++)
+    {
+        uint32_t count = (ribbons >> (3 * cat)) & 7;
+        for (uint32_t r = 0; r < 4 && r < count; r++) hoenn |= 1u << (4 * cat + r);
+    }
+    hoenn |= ((ribbons >> 15) & 0xFFFu) << 20;
+    wr32(dec + 0x3C, hoenn);
+
+    dec[0x82] = g3->blocks.misc.pokerus; /* Pokerus strain/days */
 
     /* Origin/version @0x5F: Gen 3 origin game id aligns with Gen 4 version ids. */
     uint16_t origin_info = pksav_littleendian16(g3->blocks.misc.origin_info);
@@ -198,7 +324,8 @@ static bool build_pk4_from_gen3(const struct pksav_gba_pc_pokemon *g3,
     /* Ball (preserved). @0x83 for DP/Pt, @0x86 for HGSS. Encounter type @0x85=0. */
     uint8_t ball = (uint8_t)((origin_info & PKSAV_GBA_POKEMON_BALL_MASK) >>
                              PKSAV_GBA_POKEMON_BALL_OFFSET);
-    if (dest == GEN4_GAME_HGSS) dec[0x86] = ball; else dec[0x83] = ball;
+    dec[0x83] = ball;                             /* DP/Pt ball (HG/SS keeps it too) */
+    if (dest == GEN4_GAME_HGSS) dec[0x86] = ball; /* HG/SS ball */
 
     /* Met date @0x7B (year-2000, month, day) — the day it arrived. */
     time_t now = time(NULL);
@@ -245,6 +372,20 @@ pksavhelper_error transfer_pkmn_gen3_to_gen4(PokemonSave *src, uint8_t src_index
     }
 
     struct gen4_save *g4 = &dst->save.gen4_save;
+    /* Pal Park won't take a mon that knows an HM, and never empties the
+     * Gen 3 party (the game can't be saved/loaded with no party). */
+    for (int k = 0; k < 4; k++)
+    {
+        if (gen3_is_hm_move(pksav_littleendian16(sp->party[src_index].pc_data.blocks.attacks.moves[k])))
+        {
+            return error_transfer_hm_move;
+        }
+    }
+    if ((int)sp->count <= 1)
+    {
+        return error_transfer_last_pkmn;
+    }
+
     uint8_t dec[GEN4_PK4_PARTY_SIZE];
     if (!build_pk4_from_gen3(&sp->party[src_index].pc_data, g4->game, dec))
     {

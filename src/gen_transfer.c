@@ -70,7 +70,9 @@ static bool read_src_mon(PokemonSave *src, uint8_t i, struct src_mon *out)
         }
         struct pksav_gen1_party_pokemon *p = &party->party[i];
         out->dex = species_gen1_to_gen2[p->pc_data.species]; // Gen 1 internal -> dex
-        out->level = p->pc_data.level;
+        // A Gen 1 party mon's real level is party_data.level; pc_data.level is
+        // only refreshed when it's deposited, so it is stale after level-ups.
+        out->level = p->party_data.level;
         out->iv_data = p->pc_data.iv_data;
         for (int k = 0; k < PKSAV_GEN1_POKEMON_NUM_MOVES; k++)
         {
@@ -241,11 +243,19 @@ static bool build_gen3_mon(const struct src_mon *s, struct pksav_gba_pc_pokemon 
     out->blocks.growth.friendship = 70;
 
     // Attacks: move indices are stable across gens 1-3, so copy directly.
+    // Gen 1/2 keep a move's PP Ups in the top two bits of its PP byte; Gen 3
+    // packs them two bits per move into growth.pp_up.
+    uint8_t pp_up = 0;
     for (int k = 0; k < 4; k++)
     {
         out->blocks.attacks.moves[k] = pksav_littleendian16(s->moves[k]);
         out->blocks.attacks.move_pps[k] = (uint8_t)(s->move_pps[k] & 0x3F); // current PP
+        if (s->moves[k] != 0)
+        {
+            pp_up |= (uint8_t)(((s->move_pps[k] >> 6) & 3) << (2 * k));
+        }
     }
+    out->blocks.growth.pp_up = pp_up;
 
     // Effort block left zeroed (fresh EVs / contest stats).
 
@@ -339,6 +349,14 @@ pksavhelper_error transfer_pkmn_to_gen3(PokemonSave *src, uint8_t src_index, Pok
     {
         return error_transfer_not_obtainable; // hatch it first
     }
+    // Never leave the source with an empty party (the game can't load one).
+    int src_party_count = src->save_generation_type == SAVE_GENERATION_1
+                              ? src->save.gen1_save.pokemon_storage.p_party->count
+                              : src->save.gen2_save.pokemon_storage.p_party->count;
+    if (src_party_count <= 1)
+    {
+        return error_transfer_last_pkmn;
+    }
 
     struct pksav_gba_pc_pokemon mon;
     uint16_t dex;
@@ -358,6 +376,7 @@ pksavhelper_error transfer_pkmn_to_gen3(PokemonSave *src, uint8_t src_index, Pok
     {
         int i = (int)storage->p_party->count;
         storage->p_party->party[i].pc_data = mon;
+        storage->p_party->party[i].party_data.pokerus_time = 0xFF; // fresh slot: no mail
         gen3_build_party_data(&mon, &storage->p_party->party[i].party_data);
         storage->p_party->count = (uint32_t)(i + 1);
     }

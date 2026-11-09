@@ -8,11 +8,14 @@
 
 // Gen 2 (Crystal) key item id.
 #define ITEM_GS_BALL 115
-// Gen 3 key item ids (RSE/FRLG).
-#define ITEM_EON_TICKET   271
-#define ITEM_MYSTIC_TICKET 272
-#define ITEM_AURORA_TICKET 273
-#define ITEM_OLD_SEA_MAP   361
+// Gen 3 key item ids, identical in R/S, Emerald and FR/LG (pret pokeemerald /
+// pokefirered / pokeruby include/constants/items.h). The old values (271-273,
+// 361) were Basement Key, Acro Bike, Pokeblock Case and Town Map -- and the
+// "already in the bag" check then matched the player's real Basement Key.
+#define ITEM_EON_TICKET    275
+#define ITEM_MYSTIC_TICKET 370
+#define ITEM_AURORA_TICKET 371
+#define ITEM_OLD_SEA_MAP   376
 
 // Gen 3 event flags (bit index into SaveBlock1 flags[]; pret decomp FLAG_*).
 // See docs/event-flags.md. Flags differ per game, so each row
@@ -149,7 +152,7 @@ static bool gba_add_key_item(PokemonSave *pkmn_save, uint16_t item_id)
     {
         if (pksav_littleendian16(keys[i].index) == item_id)
         {
-            return true; // already present; the flag may still need setting
+            return true; // this exact ticket is already present; the flag may still need setting
         }
     }
     for (int i = 0; i < capacity; i++)

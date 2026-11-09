@@ -38,12 +38,15 @@ uint16_t gen4_crc16_ccitt(const uint8_t *data, size_t len)
 }
 
 /* Block-shuffle table: order[sv][i] = physical slot holding logical block i.
- * sv is (PID>>13)&0x1F, reduced mod 24 (24..31 duplicate 0..7). */
+ * sv is (PID>>13)&0x1F, reduced mod 24 (24..31 duplicate 0..7). This is
+ * PKHeX's PokeCrypto.BlockPosition verbatim. (An earlier lexicographic table
+ * agreed with it only for sv 0-7 and the self-inverse rows, so other PIDs
+ * decoded as the wrong species and Pal Park wrote scrambled mons.) */
 static const uint8_t block_order[24][4] = {
     {0, 1, 2, 3}, {0, 1, 3, 2}, {0, 2, 1, 3}, {0, 3, 1, 2}, {0, 2, 3, 1}, {0, 3, 2, 1},
-    {1, 0, 2, 3}, {1, 0, 3, 2}, {1, 2, 0, 3}, {1, 3, 0, 2}, {1, 2, 3, 0}, {1, 3, 2, 0},
-    {2, 0, 1, 3}, {2, 0, 3, 1}, {2, 1, 0, 3}, {2, 1, 3, 0}, {2, 3, 0, 1}, {2, 3, 1, 0},
-    {3, 0, 1, 2}, {3, 0, 2, 1}, {3, 1, 0, 2}, {3, 1, 2, 0}, {3, 2, 0, 1}, {3, 2, 1, 0}};
+    {1, 0, 2, 3}, {1, 0, 3, 2}, {2, 0, 1, 3}, {3, 0, 1, 2}, {2, 0, 3, 1}, {3, 0, 2, 1},
+    {1, 2, 0, 3}, {1, 3, 0, 2}, {2, 1, 0, 3}, {3, 1, 0, 2}, {2, 3, 0, 1}, {3, 2, 0, 1},
+    {1, 2, 3, 0}, {1, 3, 2, 0}, {2, 1, 3, 0}, {3, 1, 2, 0}, {2, 3, 1, 0}, {3, 2, 1, 0}};
 
 /* Advance the 16-bit-key LCRNG and XOR each u16 word in place. */
 static void crypt_words(uint8_t *base, int n_words, uint32_t seed)

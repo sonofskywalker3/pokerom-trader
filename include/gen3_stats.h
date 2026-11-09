@@ -30,4 +30,8 @@ uint8_t gen3_growth_rate_for_dex(uint16_t national_dex);
 bool gen3_build_party_data(const struct pksav_gba_pc_pokemon *pc,
                            struct pksav_gba_pokemon_party_data *out);
 
+// Max PP of a Gen 3 move (#1-354) with 0-3 PP Ups; 0 for no/unknown move.
+// Gen 4 keeps the same base PP for these moves.
+uint8_t gen3_move_max_pp(uint16_t move, uint8_t pp_ups);
+
 #endif /* GEN3_STATS_H */

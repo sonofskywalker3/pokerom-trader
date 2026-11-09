@@ -40,6 +40,7 @@ enum eligible_trade_status
     E_TRADE_STATUS_MAIL
 };
 
+#define GEN2_ITEM_EVERSTONE 0x70
 #define LEFTOVERS 146
 #define BITTER_BERRY 83
 #define BERRY 173
@@ -88,6 +89,7 @@ struct bills_pc_entry_view
     uint8_t level;    // 0 when unknown (Gen 3 boxed mons store no level)
     uint8_t type1;    // Gen 1 type enum value, or BILLS_PC_TYPE_UNKNOWN
     uint8_t type2;
+    bool is_egg;      // eggs aren't Pokedex-registered until they hatch
 };
 
 // Sort every PC box's contents at once: all boxed Pokémon are gathered, sorted,
@@ -113,6 +115,8 @@ int bills_pc_current_box_num(const PokemonSave *pkmn_save);
 int bills_pc_container_count(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num);
 void bills_pc_get_view(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index, struct bills_pc_entry_view *out_view);
 bool bills_pc_slot_holds_mail(const PokemonSave *pkmn_save, enum bills_pc_location location, int box_num, int index);
+// True if a Gen 3 mon holds a Mail item (121-132).
+bool gen3_holds_mail(const struct pksav_gba_pc_pokemon *pc);
 // Move (deposit/withdraw) or swap a Pokémon between two slots within one save.
 // Returns error_none on success, or a pksavhelper_error describing why it was rejected.
 pksavhelper_error bills_pc_move_pkmn(PokemonSave *pkmn_save, struct bills_pc_slot src, struct bills_pc_slot dst);
@@ -144,7 +148,9 @@ void pokedex_reconcile(PokemonSave *pkmn_save);
 enum eligible_evolution_status check_trade_evolution_gen1(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 enum eligible_evolution_status check_trade_evolution_gen2(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 enum eligible_evolution_status check_trade_evolution_gen3(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
-void evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
+// Trade-evolve the party mon at the index. Returns false (save untouched) if the
+// index is out of range or the mon isn't eligible.
+bool evolve_party_pokemon_at_index(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 void generate_random_number_step(void);
 void update_pkmn_DVs(PokemonSave *pkmn_save, uint8_t pkmn_party_index);
 // Big-endian-aware wrappers around pksav's GB DV accessors (see pksavhelper.c).
