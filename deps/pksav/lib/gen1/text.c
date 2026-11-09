@@ -87,6 +87,13 @@ static enum pksav_error _pksav_gen1_export_widetext(
 
     for(size_t char_index = 0; char_index < num_chars; ++char_index)
     {
+        // Stop at the end of the input. Without this the NUL itself is looked
+        // up in the character map and its first zero entry (an unused code)
+        // overwrites the terminator padding.
+        if(p_input_widetext[char_index] == L'\0')
+        {
+            break;
+        }
         if(p_input_widetext[char_index] == ASCII_SPACE)
         {
             p_output_buffer[char_index] = PKSAV_GEN1_TEXT_SPACE;
@@ -123,7 +130,9 @@ enum pksav_error pksav_gen1_import_text(
         return PKSAV_ERROR_NULL_POINTER;
     }
 
-    wchar_t* p_widetext = calloc(num_chars, sizeof(wchar_t));
+    // +1: a full-length name fills num_chars, and the conversion below
+    // needs a NUL-terminated wide string.
+    wchar_t* p_widetext = calloc(num_chars + 1, sizeof(wchar_t));
     _pksav_gen1_import_widetext(
         p_input_buffer, p_widetext, num_chars
     );
@@ -146,7 +155,9 @@ enum pksav_error pksav_gen1_export_text(
         return PKSAV_ERROR_NULL_POINTER;
     }
 
-    wchar_t* p_widetext = calloc(num_chars, sizeof(wchar_t));
+    // +1: a full-length name fills num_chars, and the conversion below
+    // needs a NUL-terminated wide string.
+    wchar_t* p_widetext = calloc(num_chars + 1, sizeof(wchar_t));
     pksav_mbstowcs(p_widetext, input_text, num_chars);
 
     _pksav_gen1_export_widetext(

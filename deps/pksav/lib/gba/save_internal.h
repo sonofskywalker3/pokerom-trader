@@ -267,12 +267,15 @@ enum pksav_gba_section4_field
     PKSAV_GBA_NUM_SECTION4_OFFSETS
 };
 
-// TODO: verify daycare positions
+// Section 4 holds SaveBlock1 + 0x2E80 onward (3 * 0xF80). Daycare is at
+// SaveBlock1 + 0x2F9C (RS), 0x3030 (E) and 0x2F80 (FRLG) per pret pokeruby /
+// pokeemerald / pokefirered include/global.h; the old 0x00A1 / 0x01A1 /
+// 0x01B1 pointed into unrelated (and misaligned) data.
 static const size_t PKSAV_GBA_SAVE_SECTION4_OFFSETS[][PKSAV_GBA_NUM_SECTION4_OFFSETS] =
 {
-    {0x00A1,0x0C0C,0x0000},
-    {0x01A1,0x0CA4,0x0000},
-    {0x01B1,0x0B98,0x0BCC}
+    {0x011C,0x0C0C,0x0000},
+    {0x01B0,0x0CA4,0x0000},
+    {0x0100,0x0B98,0x0BCC}
 };
 
 #ifdef __cplusplus

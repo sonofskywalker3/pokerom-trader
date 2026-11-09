@@ -404,7 +404,9 @@ static enum pksav_error _pksav_gen2_load_save_from_buffer(
                 buffer_len,
                 &save_type
             );
-    if(!error && (save_type != PKSAV_GEN2_SAVE_TYPE_NONE))
+    // A buffer that isn't a valid save must be reported as such: success
+    // with an untouched output struct would hand callers garbage pointers.
+    if(!error)
     {
         if(save_type != PKSAV_GEN2_SAVE_TYPE_NONE)
         {

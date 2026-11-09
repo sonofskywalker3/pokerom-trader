@@ -763,6 +763,18 @@ enum pksav_error pksav_gba_save_save(
     return error;
 }
 
+// Number of event flags for a given game, or 0 if unknown.
+static uint16_t _pksav_gba_num_event_flags(enum pksav_gba_save_type save_type)
+{
+    switch(save_type)
+    {
+        case PKSAV_GBA_SAVE_TYPE_RS:      return PKSAV_GBA_RS_NUM_EVENT_FLAGS;
+        case PKSAV_GBA_SAVE_TYPE_EMERALD: return PKSAV_GBA_EMERALD_NUM_EVENT_FLAGS;
+        case PKSAV_GBA_SAVE_TYPE_FRLG:    return PKSAV_GBA_FRLG_NUM_EVENT_FLAGS;
+        default:                          return 0;
+    }
+}
+
 // SaveBlock1 event-flag base offset (bytes) for a given game, or 0 if unknown.
 static size_t _pksav_gba_event_flags_base(enum pksav_gba_save_type save_type)
 {
@@ -808,6 +820,10 @@ enum pksav_error pksav_gba_save_get_flag(
     {
         return PKSAV_ERROR_INVALID_SAVE;
     }
+    if(flag_id >= _pksav_gba_num_event_flags(p_gba_save->save_type))
+    {
+        return PKSAV_ERROR_PARAM_OUT_OF_RANGE;
+    }
 
     struct pksav_gba_save_internal* p_internal = p_gba_save->p_internal;
     uint8_t* p_byte = _pksav_gba_saveblock1_byte(p_internal, base + (flag_id >> 3));
@@ -835,6 +851,10 @@ enum pksav_error pksav_gba_save_set_flag(
     if(base == 0)
     {
         return PKSAV_ERROR_INVALID_SAVE;
+    }
+    if(flag_id >= _pksav_gba_num_event_flags(p_gba_save->save_type))
+    {
+        return PKSAV_ERROR_PARAM_OUT_OF_RANGE;
     }
 
     struct pksav_gba_save_internal* p_internal = p_gba_save->p_internal;

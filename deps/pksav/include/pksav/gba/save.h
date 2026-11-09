@@ -37,6 +37,12 @@
 #define PKSAV_GBA_EMERALD_EVENT_FLAGS_OFFSET (0x1270)
 #define PKSAV_GBA_FRLG_EVENT_FLAGS_OFFSET    (0x0EE0)
 
+// Number of event flags per game (pret FLAGS_COUNT): the game variables start
+// right after the flags, so a flag id at or past this would write into them.
+#define PKSAV_GBA_RS_NUM_EVENT_FLAGS      (0x900)
+#define PKSAV_GBA_EMERALD_NUM_EVENT_FLAGS (0x960)
+#define PKSAV_GBA_FRLG_NUM_EVENT_FLAGS    (0x900)
+
 #define PKSAV_GBA_RIVAL_NAME_LENGTH PKSAV_GBA_TRAINER_NAME_LENGTH
 
 #define PKSAV_GBA_SAVE_MONEY_MAX_VALUE        (999999)
